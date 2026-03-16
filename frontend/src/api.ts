@@ -20,11 +20,13 @@ export interface CleaningReport {
   excluded_noise: number;
   excluded_doc_type: number;
   excluded_sgl: number;
+  excluded_date_fy: number;
   flagged_advance: number;
   flagged_ab: number;
   flagged_other_sgl: number;
   duplicates_removed: number;
   split_invoices_flagged: number;
+  used_fallback_doc_types: boolean;
 }
 
 export interface MatchedPair {
@@ -69,13 +71,26 @@ export interface ReconcileResponse {
   cleaning_report?: CleaningReport;
 }
 
+export interface FinancialYearsResponse {
+  years: string[];
+  default: string;
+}
+
+export async function fetchFinancialYears(): Promise<FinancialYearsResponse> {
+  const res = await fetch(`${BASE}/financial-years`);
+  if (!res.ok) throw new Error('Failed to load financial years');
+  return res.json();
+}
+
 export async function reconcile(
   sapFile: File,
   as26File: File,
+  financialYear: string,
 ): Promise<ReconcileResponse> {
   const form = new FormData();
   form.append('sap_file', sapFile);
   form.append('as26_file', as26File);
+  form.append('financial_year', financialYear);
 
   const res = await fetch(`${BASE}/reconcile`, { method: 'POST', body: form });
   if (!res.ok) {
@@ -115,4 +130,16 @@ export async function searchDeductor(
 
 export function downloadUrl(session_id: string): string {
   return `${BASE}/download/${session_id}`;
+}
+
+/** Convert "FY2023-24" → "FY 2023-24" for display */
+export function formatFY(fy: string): string {
+  return fy.replace('FY', 'FY ');
+}
+
+/** Convert "FY2023-24" → "1 Apr 2023 – 31 Mar 2024" */
+export function fyDateRange(fy: string): string {
+  const year = parseInt(fy.replace('FY', '').split('-')[0]);
+  if (isNaN(year)) return fy;
+  return `1 Apr ${year} – 31 Mar ${year + 1}`;
 }

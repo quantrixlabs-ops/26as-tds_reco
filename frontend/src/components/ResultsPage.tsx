@@ -136,24 +136,37 @@ export default function ResultsPage({ result, cleaning, onReset }: Props) {
           className="w-full flex items-center justify-between px-5 py-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
           onClick={() => setShowClean(!showClean)}
         >
-          <span>Cleaning Breakdown</span>
+          <div className="flex items-center gap-2">
+            <span>Cleaning Breakdown</span>
+            {cleaning.used_fallback_doc_types && (
+              <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-semibold">
+                ⚠ Fallback doc types used
+              </span>
+            )}
+          </div>
           {showClean ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </button>
         {showClean && (
           <div className="border-t border-slate-100 px-5 py-4">
+            {cleaning.used_fallback_doc_types && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3 text-xs text-amber-800">
+                <strong>⚠ No RV/DR rows found</strong> — results are based on fallback document types.
+                Check that the SAP file contains RV or DR entries for this deductor.
+              </div>
+            )}
             <div className="space-y-1.5">
               {[
-                ['Total raw rows',              cleaning.total_rows_input],
-                ['→ After cleaning',            cleaning.rows_after_cleaning],
-                ['Excluded: null amount',        cleaning.excluded_null],
-                ['Excluded: negative/zero',      cleaning.excluded_negative],
-                ['Excluded: noise (<₹100)',      cleaning.excluded_noise],
-                ['Excluded: doc type (CC/BR)',   cleaning.excluded_doc_type],
-                ['Excluded: SGL (L/E/U)',        cleaning.excluded_sgl],
-                ['Flagged: advance (SGL=V)',     cleaning.flagged_advance],
-                ['Flagged: AB doc type',         cleaning.flagged_ab],
-                ['Flagged: other SGL (O/A/N)',   cleaning.flagged_other_sgl],
-                ['Duplicates removed',           cleaning.duplicates_removed],
+                ['Total raw rows',                    cleaning.total_rows_input],
+                ['→ After cleaning',                  cleaning.rows_after_cleaning],
+                ['Excluded: null amount',             cleaning.excluded_null],
+                ['Excluded: negative/zero',           cleaning.excluded_negative],
+                ['Excluded: noise (<₹100)',           cleaning.excluded_noise],
+                ['Excluded: non-RV/DR doc types',     cleaning.excluded_doc_type],
+                ['Excluded: SGL (L/E/U)',             cleaning.excluded_sgl],
+                ['Excluded: outside FY date range',   cleaning.excluded_date_fy],
+                ['Flagged: advance (SGL=V)',          cleaning.flagged_advance],
+                ['Flagged: other SGL (O/A/N)',        cleaning.flagged_other_sgl],
+                ['Duplicates removed',                cleaning.duplicates_removed],
               ].map(([label, val]) => (
                 <div key={label as string} className="flex justify-between text-sm">
                   <span className="text-slate-600">{label}</span>

@@ -16,11 +16,13 @@ class CleaningReport(BaseModel):
     excluded_noise: int
     excluded_doc_type: int
     excluded_sgl: int
-    flagged_advance: int        # SGL = V
-    flagged_ab: int             # Doc Type = AB
-    flagged_other_sgl: int      # SGL = O, A, N
+    excluded_date_fy: int = 0               # Rows outside selected FY date range
+    flagged_advance: int                    # SGL = V
+    flagged_ab: int                         # AB doc type (legacy — now excluded as primary)
+    flagged_other_sgl: int                  # SGL = O, A, N
     duplicates_removed: int
-    split_invoices_flagged: int # Same ref, different amounts
+    split_invoices_flagged: int             # Same ref, different amounts
+    used_fallback_doc_types: bool = False   # True if no RV/DR found; fallback used
 
 
 # ── Alignment ─────────────────────────────────────────────────────────────────

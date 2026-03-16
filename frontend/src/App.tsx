@@ -45,11 +45,11 @@ export default function App() {
     }
   };
 
-  const handleUpload = async (sapFile: File, as26File: File) => {
+  const handleUpload = async (sapFile: File, as26File: File, financialYear: string) => {
     setUploadError(undefined);
     setPage('processing');
     try {
-      const res = await reconcile(sapFile, as26File);
+      const res = await reconcile(sapFile, as26File, financialYear);
       handleResponse(res);
     } catch (e: any) {
       setPage('upload');
@@ -102,7 +102,7 @@ export default function App() {
       <main>
         {page === 'upload' && (
           <UploadPage
-            onUpload={handleUpload}
+            onUpload={(sap, as26, fy) => handleUpload(sap, as26, fy)}
             isLoading={false}
             error={uploadError}
           />

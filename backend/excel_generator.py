@@ -22,7 +22,7 @@ from openpyxl.styles import (
 )
 from openpyxl.utils import get_column_letter
 
-from config import FINANCIAL_YEAR
+from config import DEFAULT_FINANCIAL_YEAR
 from models import CleaningReport, MatchedPair, RecoResult
 
 # ── Colour constants ──────────────────────────────────────────────────────────
@@ -118,14 +118,16 @@ def _var_color(pct: float) -> str:
 
 # ── Sheet 1: Summary ──────────────────────────────────────────────────────────
 
-def _build_summary(ws, result: RecoResult, report: CleaningReport) -> None:
+def _build_summary(
+    ws, result: RecoResult, report: CleaningReport, fy_label: str = DEFAULT_FINANCIAL_YEAR
+) -> None:
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "A2"
 
     now_str = datetime.now().strftime("%d-%b-%Y %H:%M")
     title = (
         f"{result.deductor_name} | TDS Reconciliation | "
-        f"{FINANCIAL_YEAR} | Generated: {now_str}"
+        f"{fy_label} | Generated: {now_str}"
     )
     _header_style(ws, 1, 1, 4, title)
 
@@ -135,23 +137,31 @@ def _build_summary(ws, result: RecoResult, report: CleaningReport) -> None:
     row += 1
 
     cleaning_rows = [
-        ("Total raw rows (input)",       report.total_rows_input),
-        ("Rows after cleaning",          report.rows_after_cleaning),
-        ("  Excluded — null amount",     report.excluded_null),
-        ("  Excluded — negative/zero",   report.excluded_negative),
-        ("  Excluded — noise (<₹100)",   report.excluded_noise),
-        ("  Excluded — doc type (CC/BR)", report.excluded_doc_type),
-        ("  Excluded — Special G/L (L/E/U)", report.excluded_sgl),
-        ("  Flagged — advance (SGL=V)",  report.flagged_advance),
-        ("  Flagged — AB doc type",      report.flagged_ab),
-        ("  Flagged — other SGL (O/A/N)", report.flagged_other_sgl),
-        ("  Duplicates removed",         report.duplicates_removed),
-        ("  Split invoices flagged",     report.split_invoices_flagged),
+        ("Total raw rows (input)",              report.total_rows_input,          None),
+        ("Rows after cleaning",                 report.rows_after_cleaning,       None),
+        ("  Excluded — null amount",            report.excluded_null,             None),
+        ("  Excluded — negative/zero",          report.excluded_negative,         None),
+        ("  Excluded — noise (<₹100)",          report.excluded_noise,            None),
+        ("  Excluded — doc type (non-RV/DR)",   report.excluded_doc_type,         None),
+        ("  Excluded — Special G/L (L/E/U)",    report.excluded_sgl,              None),
+        ("  Excluded — outside FY date range",  report.excluded_date_fy,          None),
+        ("  Flagged — advance (SGL=V)",         report.flagged_advance,           None),
+        ("  Flagged — other SGL (O/A/N)",       report.flagged_other_sgl,         None),
+        ("  Duplicates removed",                report.duplicates_removed,        None),
+        ("  Split invoices flagged",            report.split_invoices_flagged,    None),
     ]
 
-    for label, value in cleaning_rows:
-        _data_cell(ws, row, 1, label)
-        _data_cell(ws, row, 2, value, align_h="right")
+    for label, value, bg in cleaning_rows:
+        _data_cell(ws, row, 1, label, bg=bg)
+        _data_cell(ws, row, 2, value, align_h="right", bg=bg)
+        row += 1
+
+    # Fallback warning if no RV/DR were found
+    if report.used_fallback_doc_types:
+        _data_cell(ws, row, 1,
+            "⚠ No RV/DR rows found — fallback to all valid doc types used",
+            bg="FFEB9C")
+        _data_cell(ws, row, 2, "FALLBACK", align_h="center", bg="FFEB9C")
         row += 1
 
     row += 1
@@ -166,6 +176,7 @@ def _build_summary(ws, result: RecoResult, report: CleaningReport) -> None:
     )
 
     reco_rows = [
+        ("Financial Year",         fy_label,                               None),
         ("Deductor Name",          result.deductor_name,                   None),
         ("TAN",                    result.tan,                             None),
         ("Name Match Score",
@@ -357,6 +368,7 @@ def _build_variance(ws, pairs: List[MatchedPair]) -> None:
 def generate_excel(
     result: RecoResult,
     report: CleaningReport,
+    fy_label: str = DEFAULT_FINANCIAL_YEAR,
 ) -> bytes:
     """
     Build the 5-sheet Excel workbook and return as bytes.
@@ -366,7 +378,7 @@ def generate_excel(
     # Sheet 1 — Summary
     ws1 = wb.active
     ws1.title = "Summary"
-    _build_summary(ws1, result, report)
+    _build_summary(ws1, result, report, fy_label=fy_label)
 
     # Sheet 2 — Matched Pairs
     ws2 = wb.create_sheet("Matched Pairs")

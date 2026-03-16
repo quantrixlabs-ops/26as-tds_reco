@@ -23,7 +23,7 @@ from __future__ import annotations
 import io
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 
 import openpyxl
@@ -80,9 +80,33 @@ def _detect_header_row(ws) -> int:
     return 3
 
 
-def parse_26as(file_bytes: bytes) -> pd.DataFrame:
+def _parse_date_to_date(val: Any) -> Optional[date]:
+    """Return a date object from a cell value, or None."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    try:
+        return pd.to_datetime(str(val), dayfirst=True).date()
+    except Exception:
+        return None
+
+
+def parse_26as(
+    file_bytes: bytes,
+    fy_start: Optional[date] = None,
+    fy_end: Optional[date] = None,
+) -> pd.DataFrame:
     """
     Parse a 26AS Excel file and return a DataFrame with Status=F rows only.
+
+    Parameters
+    ----------
+    file_bytes : Raw .xlsx bytes
+    fy_start   : If provided, exclude rows where transaction_date < fy_start
+    fy_end     : If provided, exclude rows where transaction_date > fy_end
 
     Columns returned:
         deductor_name, tan, section, transaction_date, amount,
@@ -152,6 +176,14 @@ def parse_26as(file_bytes: bytes) -> pd.DataFrame:
             continue
         if amount <= 0:
             continue
+
+        # ── FY date-range filter ──────────────────────────────────────────
+        if fy_start and fy_end:
+            txn_date = _parse_date_to_date(mapped.get("transaction_date"))
+            if txn_date is not None and not (fy_start <= txn_date <= fy_end):
+                continue
+            # If txn_date is None and filter is active, still include the row
+            # (can't filter what can't be parsed)
 
         rows.append({
             "deductor_name":    str(mapped.get("deductor_name") or "").strip(),
