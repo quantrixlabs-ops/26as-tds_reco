@@ -109,9 +109,10 @@ export default function ResultsPage({ result, cleaning, onReset }: Props) {
           color={result.constraint_violations === 0 ? 'green' : 'red'}
         />
         <StatCard
-          label="Variance Cap"
-          value="5%"
-          sub="Matches above 5% rejected"
+          label="LOW Confidence"
+          value={result.low_confidence_count}
+          sub="Variance > 5% (force-matched)"
+          color="red"
         />
       </div>
 
@@ -131,7 +132,7 @@ export default function ResultsPage({ result, cleaning, onReset }: Props) {
         <StatCard
           label="Unmatched 26AS"
           value={result.unmatched_26as_count}
-          sub={result.unmatched_26as_count > 0 ? 'Best match exceeded 5% cap' : 'All matched ✓'}
+          sub={result.unmatched_26as_count > 0 ? 'No available books' : 'All matched ✓'}
           color={result.unmatched_26as_count > 0 ? 'amber' : 'green'}
         />
         <StatCard
@@ -185,7 +186,7 @@ export default function ResultsPage({ result, cleaning, onReset }: Props) {
                 ['→ After cleaning',                  cleaning.rows_after_cleaning],
                 ['Excluded: null amount',             cleaning.excluded_null],
                 ['Excluded: negative/zero',           cleaning.excluded_negative],
-                ['Excluded: noise (<₹100)',           cleaning.excluded_noise],
+                ['Excluded: noise (<₹1)',             cleaning.excluded_noise],
                 ['Excluded: doc type (CC/BR/other)',   cleaning.excluded_doc_type],
                 ['Excluded: SGL (L/E/U)',             cleaning.excluded_sgl],
                 ['Excluded: outside FY date range',   cleaning.excluded_date_fy],

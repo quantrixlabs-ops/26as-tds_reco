@@ -8,12 +8,13 @@ from typing import Tuple
 
 # ── Reconciliation Engine ─────────────────────────────────────────────────────
 MAX_COMBO_SIZE: int = 8          # Max invoices in a single combination match
-COMBO_LIMIT: int = 200           # Max combinations tried per 26AS entry
+COMBO_LIMIT: int = 500           # Max combinations tried per 26AS entry (raised for better matching)
 EXACT_TOLERANCE: float = 0.01   # ₹ difference threshold for EXACT classification
-VARIANCE_CAP_PCT: float = 5.0   # P0: Hard cap — reject matches with variance > 5%
+VARIANCE_CAP_PCT: float = 5.0   # Phase A/B cap — quality matches only (HIGH/MEDIUM)
+                                 # Phase C (force-match) ignores this cap → LOW confidence
 
 # ── Cleaning Pipeline ─────────────────────────────────────────────────────────
-NOISE_THRESHOLD: float = 100.0  # Rows with amount < ₹100 are excluded as noise
+NOISE_THRESHOLD: float = 1.0    # Rows with amount < ₹1 are excluded (keep all meaningful amounts)
 
 # P2: SAP Date Window — include current FY + one prior FY only.
 # For FY2023-24 reco: SAP invoices from Apr 2022 – Mar 2024 are eligible.

@@ -1,29 +1,29 @@
 """
-TDS Reconciliation Engine — v2 with Clearing Group Matching
+TDS Reconciliation Engine — v3 with Force-Matching
 Pure function: run_reco(clean_books, as26_entries, ...) → RecoResult
 
-Changes from v1:
-  P0: Hard 5% variance cap — matches above this go to unmatched with reason
-  P1: Clearing Document group matching — try payment groups FIRST, then individuals
-  P3: Confidence tiers — HIGH (≤1%), MEDIUM (1–5%)
-  P4: Tracks clearing_doc, sap_fy, cross_fy per match
-
-Algorithm (v2):
-    Phase A — Clearing Group Matching
+Algorithm (v3):
+    Phase A — Clearing Group Matching (5% cap)
       1. Build clearing groups from SAP (group by clearing_doc, sum amounts)
       2. For each 26AS entry sorted ascending by amount:
          a. Try exact match against clearing group totals
          b. Try closest clearing group (within 5% tolerance)
       3. Commit if variance ≤ 5%, else skip to Phase B
 
-    Phase B — Individual Invoice Matching (for unmatched 26AS from Phase A)
+    Phase B — Individual Invoice Matching (5% cap)
       1. Round 1: Exact match (abs diff < 0.01)
       2. Round 2: Best single invoice (lowest diff, books ≤ as26)
       3. Round 3: Best combo (itertools combinations up to MAX_COMBO_SIZE)
-      4. Commit ONLY if variance ≤ 5%
+      4. Commit ONLY if variance ≤ 5% → HIGH/MEDIUM confidence
 
-    Phase C — Classify remainder
-      Unmatched 26AS entries get best-candidate info (what would have matched + why rejected)
+    Phase C — Force-Match Remaining (NO cap, greedy closest)
+      For every still-unmatched 26AS entry, find the BEST available books
+      regardless of variance. This ensures near-zero unmatched 26AS.
+      Matched as LOW confidence with FORCE_* match type.
+      Process DESCENDING by amount (largest first gets best picks).
+
+    Phase D — Classify truly unmatched
+      Only 26AS entries with ZERO available books remaining go here.
 
 Legal constraint (Section 199):
     books_sum MUST NEVER exceed as26_amount. Enforced at assertion level.
@@ -58,13 +58,13 @@ logger = logging.getLogger(__name__)
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _confidence(variance_pct: float) -> str:
-    """P3: Assign confidence tier based on variance."""
+    """Assign confidence tier based on variance."""
     if abs(variance_pct) <= 1.0:
         return "HIGH"
     elif abs(variance_pct) <= VARIANCE_CAP_PCT:
         return "MEDIUM"
     else:
-        return "LOW"   # will be rejected by variance cap
+        return "LOW"
 
 
 def _df_to_book_entries(clean_df: pd.DataFrame) -> List[BookEntry]:
@@ -190,7 +190,7 @@ def _try_clearing_group_match(
         diff = abs(as26.amount - group_sum)
         var_pct = _variance_pct(as26.amount, group_sum)
 
-        # Only accept within variance cap
+        # Phase A uses variance cap for quality matching
         if abs(var_pct) > VARIANCE_CAP_PCT:
             continue
 
@@ -206,7 +206,7 @@ def _try_clearing_group_match(
     return None
 
 
-# ── Phase B: Individual Invoice Matching ─────────────────────────────────────
+# ── Phase B: Individual Invoice Matching (with 5% cap) ───────────────────────
 
 def _try_individual_match(
     as26: As26Entry,
@@ -216,7 +216,7 @@ def _try_individual_match(
     """
     3-round individual match (Exact → Single → Combo).
     Returns (matched_books, match_type, variance_pct) or None.
-    Only returns matches within VARIANCE_CAP_PCT.
+    Only returns matches within VARIANCE_CAP_PCT (5%).
     """
     available = [
         b for b in book_entries
@@ -277,21 +277,31 @@ def _try_individual_match(
 
     var_pct = _variance_pct(as26.amount, books_sum)
 
-    # P0: Hard variance cap — reject if over 5%
+    # Phase B: Hard variance cap — reject if over 5% (Phase C will handle these)
     if abs(var_pct) > VARIANCE_CAP_PCT:
         return None
 
     return best_books, best_match_type, var_pct
 
 
-def _find_best_rejected_candidate(
+# ── Phase C: Force-Match (NO variance cap, greedy closest) ───────────────────
+
+def _try_force_match(
     as26: As26Entry,
     book_entries: List[BookEntry],
     used_book_indices: Set[int],
-) -> Tuple[Optional[str], Optional[float], Optional[float], str]:
+) -> Optional[Tuple[List[BookEntry], str, float]]:
     """
-    For an unmatched 26AS entry, find what the best candidate WOULD have been.
-    Returns (invoice_ref, amount, variance_pct, reason).
+    Find the BEST available books for a 26AS entry regardless of variance.
+    Used in Phase C for entries that couldn't match within the 5% cap.
+    Still respects the legal constraint (books_sum ≤ as26_amount).
+
+    Strategy:
+      1. Try exact match (very unlikely at this stage but check anyway)
+      2. Greedy accumulation: sort books descending, greedily pack
+      3. Best single book (closest to 26AS amount)
+      4. Combo search with itertools (improved with higher COMBO_LIMIT)
+      5. Return the best match found (closest to as26_amount)
     """
     available = [
         b for b in book_entries
@@ -299,18 +309,105 @@ def _find_best_rejected_candidate(
         and b.amount <= as26.amount + EXACT_TOLERANCE
     ]
     if not available:
-        return None, None, None, "No SAP invoice with amount ≤ 26AS amount"
+        return None
 
-    # Find closest single book
+    best_books: Optional[List[BookEntry]] = None
+    best_diff = float("inf")
+    best_match_type = ""
+
+    # ── Round 1: Exact match ─────────────────────────────────────────────
+    for b in available:
+        if abs(b.amount - as26.amount) < EXACT_TOLERANCE:
+            return [b], "FORCE_EXACT", 0.0
+
+    # ── Round 2: Greedy accumulation (new optimization) ──────────────────
+    # Sort available books descending by amount, greedily pack as many as
+    # possible without exceeding as26_amount
+    sorted_avail = sorted(available, key=lambda b: b.amount, reverse=True)
+    greedy_combo: List[BookEntry] = []
+    greedy_sum = 0.0
+    for b in sorted_avail:
+        if greedy_sum + b.amount <= as26.amount + EXACT_TOLERANCE:
+            greedy_combo.append(b)
+            greedy_sum += b.amount
+    if greedy_combo:
+        diff = abs(as26.amount - greedy_sum)
+        if diff < best_diff:
+            best_diff = diff
+            best_books = greedy_combo
+            if len(greedy_combo) == 1:
+                best_match_type = "FORCE_SINGLE"
+            else:
+                best_match_type = f"FORCE_COMBO_{len(greedy_combo)}"
+
+    # ── Round 3: Best single book ────────────────────────────────────────
+    for b in available:
+        diff = abs(as26.amount - b.amount)
+        if diff < best_diff:
+            best_diff = diff
+            best_books = [b]
+            best_match_type = "FORCE_SINGLE"
+
+    # ── Round 4: Combo search (may improve on greedy/single) ─────────────
+    combo_count = 0
+    for size in range(2, min(MAX_COMBO_SIZE + 1, len(available) + 1)):
+        if combo_count >= COMBO_LIMIT:
+            break
+        for combo in itertools.combinations(available, size):
+            if combo_count >= COMBO_LIMIT:
+                break
+            combo_count += 1
+            combo_sum = sum(b.amount for b in combo)
+            if combo_sum > as26.amount + EXACT_TOLERANCE:
+                continue
+            diff = abs(as26.amount - combo_sum)
+            if diff < best_diff:
+                best_diff = diff
+                best_books = list(combo)
+                best_match_type = f"FORCE_COMBO_{size}"
+
+    if best_books is None:
+        return None
+
+    books_sum = sum(b.amount for b in best_books)
+
+    # Legal constraint (still enforced)
+    if books_sum > as26.amount + EXACT_TOLERANCE:
+        return None
+
+    var_pct = _variance_pct(as26.amount, books_sum)
+
+    # NO variance cap check — this is force-matching
+    return best_books, best_match_type, var_pct
+
+
+# ── Phase D: Diagnostics for truly unmatched ─────────────────────────────────
+
+def _find_best_rejected_candidate(
+    as26: As26Entry,
+    book_entries: List[BookEntry],
+    used_book_indices: Set[int],
+) -> Tuple[Optional[str], Optional[float], Optional[float], str]:
+    """
+    For a truly unmatched 26AS entry (no books available at all),
+    explain why no match was possible.
+    """
+    available = [
+        b for b in book_entries
+        if b.index not in used_book_indices
+        and b.amount <= as26.amount + EXACT_TOLERANCE
+    ]
+    if not available:
+        # Check if there are ANY unused books (but all exceed as26_amount)
+        all_unused = [b for b in book_entries if b.index not in used_book_indices]
+        if all_unused:
+            return None, None, None, "All remaining SAP invoices exceed 26AS amount"
+        return None, None, None, "No SAP invoices remaining (all consumed by other matches)"
+
+    # This shouldn't happen in Phase D since Phase C would have matched it
     best = min(available, key=lambda b: abs(as26.amount - b.amount))
     var_pct = _variance_pct(as26.amount, best.amount)
-
-    if abs(var_pct) > VARIANCE_CAP_PCT:
-        reason = f"Best candidate variance {var_pct:.1f}% exceeds {VARIANCE_CAP_PCT}% cap"
-    else:
-        reason = "Insufficient book entries for this amount"
-
-    return best.invoice_ref, best.amount, round(var_pct, 2), reason
+    return best.invoice_ref, best.amount, round(var_pct, 2), "Unexpected — should have been force-matched"
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
@@ -325,7 +422,11 @@ def run_reco(
     target_fy: str = "",
 ) -> RecoResult:
     """
-    Run the 2-phase reconciliation: Clearing Groups first, then individual matching.
+    Run the 3-phase reconciliation:
+      Phase A: Clearing Groups (5% cap)
+      Phase B: Individual matching (5% cap)
+      Phase C: Force-match remaining (no cap) → LOW confidence
+      Phase D: Classify truly unmatched (zero books available)
     """
     if session_id is None:
         session_id = str(uuid.uuid4())
@@ -333,7 +434,7 @@ def run_reco(
     book_entries = _df_to_book_entries(clean_df)
     as26_entries = _df_to_as26_entries(as26_slice)
 
-    # Sort 26AS ascending by amount (small first)
+    # Sort 26AS ascending by amount (small first) for Phases A+B
     as26_entries.sort(key=lambda x: x.amount)
 
     used_book_indices: Set[int] = set()
@@ -341,7 +442,7 @@ def run_reco(
     matched_pairs: List[MatchedPair] = []
     constraint_violations = 0
 
-    # ── Phase A: Clearing Group Matching ─────────────────────────────────
+    # ── Phase A: Clearing Group Matching (5% cap) ─────────────────────────
     clearing_groups = _build_clearing_groups(book_entries)
     phase_a_remaining: List[As26Entry] = []
 
@@ -364,12 +465,13 @@ def run_reco(
         else:
             phase_a_remaining.append(as26)
 
+    phase_a_count = len(matched_pairs)
     logger.info(
         "Phase A (Clearing Groups): %d/%d matched | %d groups available",
-        len(matched_pairs), len(as26_entries), len(clearing_groups),
+        phase_a_count, len(as26_entries), len(clearing_groups),
     )
 
-    # ── Phase B: Individual Invoice Matching ─────────────────────────────
+    # ── Phase B: Individual Invoice Matching (5% cap) ─────────────────────
     phase_b_unmatched: List[As26Entry] = []
 
     for as26 in phase_a_remaining:
@@ -390,15 +492,44 @@ def run_reco(
         else:
             phase_b_unmatched.append(as26)
 
+    phase_b_count = len(matched_pairs) - phase_a_count
     logger.info(
-        "Phase B (Individual): %d more matched | %d unmatched",
-        len(matched_pairs) - (len(as26_entries) - len(phase_a_remaining)),
-        len(phase_b_unmatched),
+        "Phase B (Individual): %d more matched | %d remaining for force-match",
+        phase_b_count, len(phase_b_unmatched),
     )
 
-    # ── Phase C: Classify unmatched ──────────────────────────────────────
-    unmatched_26as: List[UnmatchedAs26Entry] = []
+    # ── Phase C: Force-Match Remaining (NO variance cap) ──────────────────
+    # Process DESCENDING by amount — largest unmatched entries get first pick
+    phase_b_unmatched.sort(key=lambda x: x.amount, reverse=True)
+    phase_c_unmatched: List[As26Entry] = []
+
     for as26 in phase_b_unmatched:
+        result = _try_force_match(as26, book_entries, used_book_indices)
+        if result is not None:
+            books, match_type, var_pct = result
+            # Legal assertion (still enforced)
+            books_sum = sum(b.amount for b in books)
+            if books_sum > as26.amount + EXACT_TOLERANCE:
+                constraint_violations += 1
+                phase_c_unmatched.append(as26)
+                continue
+            # Commit
+            for b in books:
+                used_book_indices.add(b.index)
+            pair = _build_matched_pair(as26, books, match_type, target_fy)
+            matched_pairs.append(pair)
+        else:
+            phase_c_unmatched.append(as26)
+
+    phase_c_count = len(matched_pairs) - phase_a_count - phase_b_count
+    logger.info(
+        "Phase C (Force-Match): %d more matched | %d truly unmatched (no books available)",
+        phase_c_count, len(phase_c_unmatched),
+    )
+
+    # ── Phase D: Classify truly unmatched (zero available books) ──────────
+    unmatched_26as: List[UnmatchedAs26Entry] = []
+    for as26 in phase_c_unmatched:
         ref, amt, var, reason = _find_best_rejected_candidate(
             as26, book_entries, used_book_indices,
         )
@@ -429,14 +560,15 @@ def run_reco(
     )
     high_conf = sum(1 for p in matched_pairs if p.confidence == "HIGH")
     med_conf  = sum(1 for p in matched_pairs if p.confidence == "MEDIUM")
+    low_conf  = sum(1 for p in matched_pairs if p.confidence == "LOW")
     cross_fy  = sum(1 for p in matched_pairs if p.cross_fy)
 
     logger.info(
         "Reco complete: %d/%d matched (%.1f%%) | avg_var=%.2f%% | violations=%d | "
-        "HIGH=%d MEDIUM=%d | cross_fy=%d | unmatched_26as=%d | unmatched_books=%d",
+        "HIGH=%d MEDIUM=%d LOW=%d | cross_fy=%d | unmatched_26as=%d | unmatched_books=%d",
         matched_count, total_26as, match_rate,
         avg_variance, constraint_violations,
-        high_conf, med_conf, cross_fy,
+        high_conf, med_conf, low_conf, cross_fy,
         len(unmatched_26as), len(unmatched_books),
     )
 
@@ -453,6 +585,7 @@ def run_reco(
         constraint_violations=constraint_violations,
         high_confidence_count=high_conf,
         medium_confidence_count=med_conf,
+        low_confidence_count=low_conf,
         cross_fy_match_count=cross_fy,
         matched_pairs=matched_pairs,
         unmatched_26as=unmatched_26as,

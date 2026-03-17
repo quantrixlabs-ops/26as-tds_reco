@@ -76,7 +76,7 @@ class MatchedPair(BaseModel):
     variance_amt: float
     variance_pct: float
     match_type: str             # EXACT | SINGLE | COMBO_N | CLR_GROUP
-    confidence: str = ""        # P3: HIGH | MEDIUM
+    confidence: str = ""        # P3: HIGH | MEDIUM | LOW (force-matched)
     invoice_count: int
     invoice_refs: List[str]     # PRIMARY identifier column
     invoice_dates: List[Optional[str]]
@@ -88,7 +88,7 @@ class MatchedPair(BaseModel):
 
 
 class UnmatchedAs26Entry(BaseModel):
-    """26AS entry that could not be matched within the variance cap."""
+    """26AS entry with no available books remaining at all."""
     index: int
     transaction_date: Optional[str]
     amount: float
@@ -116,6 +116,7 @@ class RecoResult(BaseModel):
     # P3: Confidence tier counts
     high_confidence_count: int = 0
     medium_confidence_count: int = 0
+    low_confidence_count: int = 0       # Phase C: force-matched entries (variance > 5%)
     # P4: Cross-FY stats
     cross_fy_match_count: int = 0
     matched_pairs: List[MatchedPair]

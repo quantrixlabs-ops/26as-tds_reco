@@ -61,7 +61,7 @@ def _parse_date(val: Any) -> Optional[str]:
     try:
         return pd.to_datetime(str(val), dayfirst=True).strftime("%d-%b-%Y")
     except Exception:
-        return str(val)
+        return None  # Reject unparseable dates instead of returning garbage strings
 
 
 def _detect_header_row(ws) -> int:
@@ -151,6 +151,8 @@ def parse_26as(
 
     # ── Read data rows ─────────────────────────────────────────────────────
     rows = []
+    non_f_count = 0
+    date_excluded_count = 0
     for raw_row in data_sheet.iter_rows(min_row=data_start_row, values_only=True):
         # Skip entirely blank rows
         if all(v is None for v in raw_row):
@@ -164,6 +166,7 @@ def parse_26as(
         # Filter: Status = 'F' only
         status_val = str(mapped.get("status") or "").strip().upper()
         if status_val != "F":
+            non_f_count += 1
             continue
 
         # Parse amount
@@ -180,10 +183,13 @@ def parse_26as(
         # ── FY date-range filter ──────────────────────────────────────────
         if fy_start and fy_end:
             txn_date = _parse_date_to_date(mapped.get("transaction_date"))
-            if txn_date is not None and not (fy_start <= txn_date <= fy_end):
+            if txn_date is None:
+                # Exclude rows with unparseable dates when FY filter is active
+                date_excluded_count += 1
                 continue
-            # If txn_date is None and filter is active, still include the row
-            # (can't filter what can't be parsed)
+            if not (fy_start <= txn_date <= fy_end):
+                date_excluded_count += 1
+                continue
 
         rows.append({
             "deductor_name":    str(mapped.get("deductor_name") or "").strip(),
@@ -206,6 +212,10 @@ def parse_26as(
             "amount", "status", "invoice_number"
         ])
 
+    if non_f_count > 0:
+        logger.info("26AS: excluded %d rows with status != F", non_f_count)
+    if date_excluded_count > 0:
+        logger.info("26AS: excluded %d rows by FY date filter (incl. unparseable dates)", date_excluded_count)
     logger.info(
         "26AS parse: %d rows (Status=F) | deductors: %d | header at row %d",
         len(df), df["deductor_name"].nunique(), header_row_num,

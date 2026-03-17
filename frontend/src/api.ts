@@ -58,6 +58,7 @@ export interface RecoResult {
   constraint_violations: number;
   high_confidence_count: number;
   medium_confidence_count: number;
+  low_confidence_count: number;
   cross_fy_match_count: number;
   matched_pairs: MatchedPair[];
   session_id: string;

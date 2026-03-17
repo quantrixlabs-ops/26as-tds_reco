@@ -38,6 +38,7 @@ VIOLATION_RED = "FF0000"
 GOOD_GREEN    = "00B050"
 CONF_HIGH     = "C6EFCE"   # green
 CONF_MEDIUM   = "FFEB9C"   # yellow
+CONF_LOW      = "FFC7CE"   # red — force-matched entries (variance > 5%)
 
 INR_FMT = '#,##0.00'
 
@@ -109,6 +110,8 @@ def _conf_color(conf):
         return CONF_HIGH
     elif conf == "MEDIUM":
         return CONF_MEDIUM
+    elif conf == "LOW":
+        return CONF_LOW
     return VAR_RED
 
 
@@ -131,7 +134,7 @@ def _build_summary(ws, result: RecoResult, report: CleaningReport, fy_label: str
         ("Rows after cleaning",                 report.rows_after_cleaning),
         ("  Excluded — null amount",            report.excluded_null),
         ("  Excluded — negative/zero",          report.excluded_negative),
-        ("  Excluded — noise (<₹100)",          report.excluded_noise),
+        ("  Excluded — noise (<₹1)",            report.excluded_noise),
         ("  Excluded — doc type (CC/BR/other)", report.excluded_doc_type),
         ("  Excluded — Special G/L (L/E/U)",    report.excluded_sgl),
         ("  Excluded — outside SAP date window", report.excluded_date_fy),
@@ -171,13 +174,15 @@ def _build_summary(ws, result: RecoResult, report: CleaningReport, fy_label: str
         (f"  HIGH confidence (≤1%)", result.high_confidence_count,         CONF_HIGH),
         (f"  MEDIUM confidence (1–{VARIANCE_CAP_PCT:.0f}%)",
             result.medium_confidence_count, CONF_MEDIUM),
+        (f"  LOW confidence (>{VARIANCE_CAP_PCT:.0f}%, force-matched)",
+            result.low_confidence_count, CONF_LOW),
         ("Unmatched 26AS entries",  result.unmatched_26as_count,           None),
         ("Unmatched book invoices", result.unmatched_books_count,          None),
         ("Average variance %",      f"{result.avg_variance_pct:.2f}%",    None),
         ("Cross-FY matches",        result.cross_fy_match_count,          None),
         ("Constraint violations",   result.constraint_violations,
             VIOLATION_RED if result.constraint_violations > 0 else VAR_GREEN),
-        (f"Variance cap applied",   f"{VARIANCE_CAP_PCT:.0f}%",           None),
+        ("Force-match enabled",     "YES — all 26AS matched to best available", None),
     ]
 
     for label, value, bg in reco_rows:
@@ -348,10 +353,10 @@ def _build_variance(ws, pairs: List[MatchedPair]):
         ("0% Exact",  lambda p: abs(p.variance_pct) < 0.01,     VAR_GREEN,  "Perfect match"),
         ("0–1%",      lambda p: 0.01 <= abs(p.variance_pct) < 1, VAR_GREEN,  "HIGH confidence"),
         ("1–5%",      lambda p: 1 <= abs(p.variance_pct) < 5,    VAR_YELLOW, "MEDIUM confidence — acceptable"),
-        ("5–10%",     lambda p: 5 <= abs(p.variance_pct) < 10,   VAR_RED,    "Rejected by variance cap"),
-        ("10–20%",    lambda p: 10 <= abs(p.variance_pct) < 20,  VAR_RED,    "Rejected by variance cap"),
-        ("20–50%",    lambda p: 20 <= abs(p.variance_pct) < 50,  VAR_RED,    "Rejected by variance cap"),
-        (">50%",      lambda p: abs(p.variance_pct) >= 50,        VAR_RED,    "Rejected by variance cap"),
+        ("5–10%",     lambda p: 5 <= abs(p.variance_pct) < 10,   VAR_RED,    "LOW confidence — force-matched"),
+        ("10–20%",    lambda p: 10 <= abs(p.variance_pct) < 20,  VAR_RED,    "LOW confidence — force-matched"),
+        ("20–50%",    lambda p: 20 <= abs(p.variance_pct) < 50,  VAR_RED,    "LOW confidence — force-matched"),
+        (">50%",      lambda p: abs(p.variance_pct) >= 50,        VAR_RED,    "LOW confidence — force-matched"),
     ]
 
     total = len(pairs)
@@ -389,11 +394,15 @@ def _build_variance(ws, pairs: List[MatchedPair]):
         stats_row += 1
         high = sum(1 for p in pairs if p.confidence == "HIGH")
         med  = sum(1 for p in pairs if p.confidence == "MEDIUM")
+        low  = sum(1 for p in pairs if p.confidence == "LOW")
         _data_cell(ws, stats_row, 1, "HIGH (≤1%)", bg=CONF_HIGH)
         _data_cell(ws, stats_row, 2, f"{high} ({high/total*100:.1f}%)", bg=CONF_HIGH, align_h="right")
         stats_row += 1
         _data_cell(ws, stats_row, 1, f"MEDIUM (1–{VARIANCE_CAP_PCT:.0f}%)", bg=CONF_MEDIUM)
         _data_cell(ws, stats_row, 2, f"{med} ({med/total*100:.1f}%)", bg=CONF_MEDIUM, align_h="right")
+        stats_row += 1
+        _data_cell(ws, stats_row, 1, f"LOW (>{VARIANCE_CAP_PCT:.0f}%, force-matched)", bg=CONF_LOW)
+        _data_cell(ws, stats_row, 2, f"{low} ({low/total*100:.1f}%)", bg=CONF_LOW, align_h="right")
 
     _autofit(ws)
 
