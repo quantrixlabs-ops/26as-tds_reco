@@ -142,7 +142,7 @@ def _build_summary(
         ("  Excluded — null amount",            report.excluded_null,             None),
         ("  Excluded — negative/zero",          report.excluded_negative,         None),
         ("  Excluded — noise (<₹100)",          report.excluded_noise,            None),
-        ("  Excluded — doc type (non-RV/DR)",   report.excluded_doc_type,         None),
+        ("  Excluded — doc type (CC/BR/other)",  report.excluded_doc_type,         None),
         ("  Excluded — Special G/L (L/E/U)",    report.excluded_sgl,              None),
         ("  Excluded — outside FY date range",  report.excluded_date_fy,          None),
         ("  Flagged — advance (SGL=V)",         report.flagged_advance,           None),

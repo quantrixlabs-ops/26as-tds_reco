@@ -161,7 +161,7 @@ export default function ResultsPage({ result, cleaning, onReset }: Props) {
                 ['Excluded: null amount',             cleaning.excluded_null],
                 ['Excluded: negative/zero',           cleaning.excluded_negative],
                 ['Excluded: noise (<₹100)',           cleaning.excluded_noise],
-                ['Excluded: non-RV/DR doc types',     cleaning.excluded_doc_type],
+                ['Excluded: doc type (CC/BR/other)',   cleaning.excluded_doc_type],
                 ['Excluded: SGL (L/E/U)',             cleaning.excluded_sgl],
                 ['Excluded: outside FY date range',   cleaning.excluded_date_fy],
                 ['Flagged: advance (SGL=V)',          cleaning.flagged_advance],

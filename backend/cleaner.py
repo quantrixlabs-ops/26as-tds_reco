@@ -30,8 +30,10 @@ from models import CleaningReport
 logger = logging.getLogger(__name__)
 
 # ── Document Type Rules (v2) ──────────────────────────────────────────────────
-PRIMARY_DOC_TYPES  = {"RV", "DR"}   # Primary: only these two count
-EXCLUDE_DOC_TYPES  = {"CC", "BR"}   # Always excluded — reversals / bank receipts
+# RV = Revenue billing, DC = Customer invoice (alt SAP config), DR = Debit memo
+# All three are valid TDS-bearing invoice types. CC/BR always excluded.
+PRIMARY_DOC_TYPES  = {"RV", "DC", "DR"}  # Primary: all three invoice types
+EXCLUDE_DOC_TYPES  = {"CC", "BR"}        # Always excluded — reversals / bank receipts
 
 # ── Special G/L Indicator Rules ───────────────────────────────────────────────
 EXCLUDE_SGL = {"L", "E", "U"}

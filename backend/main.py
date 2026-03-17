@@ -96,11 +96,12 @@ async def reconcile(
     as26_bytes = await as26_file.read()
     sap_filename = sap_file.filename or "upload.xlsx"
 
-    # ── 3. Clean SAP books (with FY date filter) ───────────────────────────
+    # ── 3. Clean SAP books (NO date filter — keep all invoice dates)
+    # Reason: SAP invoices are booked on invoice date, which may fall outside
+    # the FY (e.g. Mar invoice posted in Apr, or prior-year invoices appearing
+    # in 26AS). The FY filter applies to 26AS (government side) only.
     try:
-        clean_df, cleaning_report = clean_sap_books(
-            sap_bytes, fy_start=fy_start, fy_end=fy_end
-        )
+        clean_df, cleaning_report = clean_sap_books(sap_bytes)
     except Exception as e:
         logger.exception("SAP cleaning failed")
         raise HTTPException(status_code=422, detail=f"SAP file parsing error: {e}")
@@ -109,13 +110,12 @@ async def reconcile(
         raise HTTPException(
             status_code=422,
             detail=(
-                f"No valid RV/DR invoice rows found in {fy_label} "
-                f"({fy_start.strftime('%d-%b-%Y')} – {fy_end.strftime('%d-%b-%Y')}) "
-                "after cleaning SAP file. Check Document Type and date columns."
+                "No valid RV/DC/DR invoice rows found after cleaning SAP file. "
+                "Check Document Type and amount columns."
             ),
         )
 
-    # ── 4. Parse 26AS (with FY date filter) ───────────────────────────────
+    # ── 4. Parse 26AS (FY date filter applied here — government side only) ─
     try:
         as26_df = parse_26as(as26_bytes, fy_start=fy_start, fy_end=fy_end)
         tanwise_extras = get_tanwise_candidates(as26_bytes)
@@ -276,6 +276,7 @@ def _run_and_respond(
             excluded_doc_type=0, excluded_sgl=0, excluded_date_fy=0,
             flagged_advance=0, flagged_ab=0, flagged_other_sgl=0,
             duplicates_removed=0, split_invoices_flagged=0,
+            used_fallback_doc_types=False,
         )
 
     excel_bytes = generate_excel(result, cleaning_report, fy_label=fy_label)
