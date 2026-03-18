@@ -16,7 +16,7 @@ interface Props {
 }
 
 export default function BatchMappingPage({
-  batchId, mappings: initialMappings, unmappedSapFiles, uncoveredParties,
+  batchId, mappings: initialMappings, unmappedSapFiles: _unmappedSapFiles, uncoveredParties,
   onConfirm, isLoading,
 }: Props) {
   const [mappings, setMappings] = useState<PartyMapping[]>(initialMappings);

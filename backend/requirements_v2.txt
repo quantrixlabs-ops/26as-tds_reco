@@ -1,0 +1,49 @@
+# 26AS Matcher v2.0 — Enterprise dependencies
+# Python 3.9+ required
+
+# ── Web framework ──────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.18
+
+# ── Database ───────────────────────────────────────────────────────────────────
+sqlalchemy==2.0.36
+alembic==1.14.0
+aiosqlite==0.20.0          # SQLite async driver (dev)
+# psycopg2-binary==2.9.10  # Uncomment for PostgreSQL (requires pg headers)
+# asyncpg==0.30.0          # Uncomment for PostgreSQL async
+
+# ── Auth & Security ────────────────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.1
+cryptography==44.0.0
+email-validator==2.2.0
+
+# ── Data processing ────────────────────────────────────────────────────────────
+pandas==2.2.3
+openpyxl==3.1.5
+numpy==2.0.2
+rapidfuzz==3.10.1
+
+# ── Optimization engine ────────────────────────────────────────────────────────
+scipy==1.13.1              # Bipartite matching (linear_sum_assignment)
+networkx==3.2.1            # Graph algorithms
+PuLP==2.9.0                # ILP solver (CBC bundled)
+
+# ── Task queue ─────────────────────────────────────────────────────────────────
+celery==5.4.0
+redis==5.2.1
+fakeredis==2.26.2          # Dev-only: in-memory Redis replacement
+
+# ── Config & logging ──────────────────────────────────────────────────────────
+pydantic-settings==2.7.0
+structlog==24.4.0
+
+# ── HTTP client & testing ──────────────────────────────────────────────────────
+httpx==0.28.1
+pytest==8.3.4
+pytest-asyncio==0.24.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+greenlet==3.1.1

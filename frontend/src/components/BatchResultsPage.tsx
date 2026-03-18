@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import {
-  Download, CheckCircle, XCircle, AlertTriangle,
+  Download, CheckCircle, XCircle,
   RefreshCw, Layers, ChevronDown, ChevronUp,
 } from 'lucide-react';
-import type { BatchResultResponse, PartyRecoSummary } from '../api';
+import type { BatchResultResponse } from '../api';
 import { batchDownloadUrl, formatFY } from '../api';
 
 interface Props {
@@ -17,11 +17,6 @@ function matchColor(pct: number): string {
   return 'text-red-600';
 }
 
-function matchBg(pct: number): string {
-  if (pct >= 95) return 'bg-emerald-50';
-  if (pct >= 75) return 'bg-amber-50';
-  return 'bg-red-50';
-}
 
 export default function BatchResultsPage({ result, onReset }: Props) {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
