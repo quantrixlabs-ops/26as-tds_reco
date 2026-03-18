@@ -335,6 +335,7 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
   const [allParties, setAllParties] = useState<BatchParty[]>([]);
   const [overrides, setOverrides] = useState<Record<string, { deductor_name: string; tan: string }>>({});
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const [dropdownSearch, setDropdownSearch] = useState('');
 
   const [previewing, setPreviewing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -534,7 +535,11 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
                   <div className="mt-1.5">
                     <button
                       type="button"
-                      onClick={() => setOpenDropdown(openDropdown === m.sap_filename ? null : m.sap_filename)}
+                      onClick={() => {
+                        const next = openDropdown === m.sap_filename ? null : m.sap_filename;
+                        setOpenDropdown(next);
+                        setDropdownSearch('');
+                      }}
                       className="text-xs text-[#1B3A5C] hover:underline"
                     >
                       {isResolved ? 'Change' : 'Select deductor'}
@@ -555,18 +560,45 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
 
                   {/* Dropdown */}
                   {openDropdown === m.sap_filename && (
-                    <div className="absolute left-0 top-full mt-1 z-30 w-72 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden max-h-52 overflow-y-auto">
-                      {allParties.map((p) => (
-                        <button
-                          key={`${p.deductor_name}|${p.tan}`}
-                          type="button"
-                          onClick={() => setOverride(m.sap_filename, p)}
-                          className="w-full text-left px-3 py-2.5 text-sm hover:bg-blue-50 transition-colors border-b border-gray-50 last:border-0"
-                        >
-                          <p className="font-medium text-gray-800 truncate">{p.deductor_name}</p>
-                          <p className="text-xs text-gray-400">{p.tan} · {p.entry_count} entries</p>
-                        </button>
-                      ))}
+                    <div className="absolute left-0 top-full mt-1 z-30 w-72 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
+                      {/* Search input */}
+                      <div className="px-3 py-2 border-b border-gray-100">
+                        <input
+                          autoFocus
+                          type="text"
+                          placeholder="Search deductor…"
+                          value={dropdownSearch}
+                          onChange={(e) => setDropdownSearch(e.target.value)}
+                          className="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-[#1B3A5C] focus:ring-2 focus:ring-[#1B3A5C]/10 placeholder-gray-400"
+                        />
+                      </div>
+                      {/* Filtered list */}
+                      <div className="max-h-44 overflow-y-auto">
+                        {allParties
+                          .filter((p) =>
+                            dropdownSearch === '' ||
+                            p.deductor_name.toLowerCase().includes(dropdownSearch.toLowerCase()) ||
+                            p.tan.toLowerCase().includes(dropdownSearch.toLowerCase()),
+                          )
+                          .map((p) => (
+                            <button
+                              key={`${p.deductor_name}|${p.tan}`}
+                              type="button"
+                              onClick={() => setOverride(m.sap_filename, p)}
+                              className="w-full text-left px-3 py-2.5 text-sm hover:bg-blue-50 transition-colors border-b border-gray-50 last:border-0"
+                            >
+                              <p className="font-medium text-gray-800 truncate">{p.deductor_name}</p>
+                              <p className="text-xs text-gray-400">{p.tan} · {p.entry_count} entries</p>
+                            </button>
+                          ))}
+                        {allParties.filter((p) =>
+                          dropdownSearch === '' ||
+                          p.deductor_name.toLowerCase().includes(dropdownSearch.toLowerCase()) ||
+                          p.tan.toLowerCase().includes(dropdownSearch.toLowerCase()),
+                        ).length === 0 && (
+                          <p className="px-3 py-4 text-sm text-gray-400 text-center">No match for "{dropdownSearch}"</p>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
