@@ -3,7 +3,9 @@
  */
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 
-export const BASE_URL = 'http://localhost:8000';
+// Empty string = use Vite proxy (/api/* → http://localhost:8000)
+// Avoids cross-origin requests entirely in development
+export const BASE_URL = '';
 
 export const apiClient = axios.create({
   baseURL: BASE_URL,
