@@ -4,6 +4,8 @@ Reconciliation run routes — upload, status, results, review, download, replay.
 from __future__ import annotations
 
 import io
+import json as _json
+import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -323,6 +325,135 @@ async def get_audit_trail(
         }
         for l in result.scalars().all()
     ]
+
+
+# ── Batch: Preview Mappings ───────────────────────────────────────────────────
+
+@router.post("/batch/preview", status_code=200)
+async def preview_batch_mappings(
+    as26_file: UploadFile = File(...),
+    sap_files: List[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Dry-run only — no DB writes.
+    Parse 26AS and fuzzy-match each SAP filename to a deductor.
+    Returns proposed mappings + full party list for manual override.
+    """
+    from aligner import align_deductor
+    from parser_26as import parse_26as
+
+    as26_bytes = await as26_file.read()
+    as26_df = parse_26as(as26_bytes)
+
+    # All unique parties in 26AS for manual-selection dropdown
+    all_parties: List[dict] = []
+    if not as26_df.empty and "deductor_name" in as26_df.columns:
+        for (name, tan), grp in as26_df.groupby(["deductor_name", "tan"]):
+            all_parties.append({
+                "deductor_name": str(name),
+                "tan": str(tan),
+                "entry_count": int(len(grp)),
+            })
+        all_parties.sort(key=lambda x: x["deductor_name"])
+
+    mappings = []
+    for sap_file in sap_files:
+        filename = sap_file.filename or "unknown.xlsx"
+        result = align_deductor(filename, as26_df)
+        mappings.append({
+            "sap_filename": filename,
+            "identity_string": result.identity_string,
+            "status": result.status,
+            "confirmed_name": result.confirmed_name,
+            "confirmed_tan": result.confirmed_tan,
+            "fuzzy_score": result.fuzzy_score,
+            "top_candidates": [
+                {
+                    "deductor_name": c.deductor_name,
+                    "tan": c.tan,
+                    "score": c.score,
+                    "entry_count": c.entry_count,
+                }
+                for c in result.top_candidates
+            ],
+        })
+
+    return {"mappings": mappings, "all_parties": all_parties}
+
+
+# ── Batch: Run All ─────────────────────────────────────────────────────────────
+
+@router.post("/batch", status_code=202)
+async def create_batch_run(
+    request: Request,
+    as26_file: UploadFile = File(...),
+    sap_files: List[UploadFile] = File(...),
+    financial_year: str = Form(default=settings.DEFAULT_FINANCIAL_YEAR),
+    mappings_json: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Run reconciliation for each SAP file against the shared 26AS.
+    Each SAP file → one ReconciliationRun, all linked by a shared batch_id.
+    mappings_json: JSON object keyed by sap_filename →
+        { "deductor_name": str, "tan": str }
+    """
+    try:
+        mappings: dict = _json.loads(mappings_json)
+    except Exception:
+        raise HTTPException(status_code=422, detail="mappings_json must be valid JSON")
+
+    max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
+    as26_bytes = await as26_file.read()
+    if len(as26_bytes) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"26AS file exceeds {settings.MAX_UPLOAD_MB}MB limit")
+
+    batch_id = str(uuid.uuid4())
+    runs_summary = []
+
+    for sap_file in sap_files:
+        sap_bytes = await sap_file.read()
+        if len(sap_bytes) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"{sap_file.filename} exceeds {settings.MAX_UPLOAD_MB}MB limit")
+
+        filename = sap_file.filename or "sap.xlsx"
+        mapping = mappings.get(filename, {})
+        deductor_name = mapping.get("deductor_name") or None
+        deductor_tan = mapping.get("tan") or None
+
+        try:
+            run = await run_reconciliation(
+                db=db,
+                current_user=current_user,
+                sap_bytes=sap_bytes,
+                as26_bytes=as26_bytes,
+                sap_filename=filename,
+                as26_filename=as26_file.filename or "26as.xlsx",
+                financial_year=financial_year,
+                batch_id=batch_id,
+                deductor_filter_name=deductor_name,
+                deductor_filter_tan=deductor_tan,
+            )
+            runs_summary.append({
+                "run_id": run.id,
+                "run_number": run.run_number,
+                "sap_filename": filename,
+                "deductor_name": run.deductor_name,
+                "match_rate_pct": run.match_rate_pct,
+                "status": run.status,
+            })
+        except Exception as e:
+            runs_summary.append({
+                "run_id": None,
+                "sap_filename": filename,
+                "deductor_name": deductor_name,
+                "status": "FAILED",
+                "error": str(e),
+            })
+
+    return {"batch_id": batch_id, "runs": runs_summary, "total": len(runs_summary)}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

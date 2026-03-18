@@ -218,6 +218,50 @@ export interface Exception {
   reviewed_by: string | null;
 }
 
+export interface BatchCandidate {
+  deductor_name: string;
+  tan: string;
+  score: number;
+  entry_count: number;
+}
+
+export interface BatchMapping {
+  sap_filename: string;
+  identity_string: string;
+  status: 'AUTO_CONFIRMED' | 'PENDING' | 'NO_MATCH';
+  confirmed_name: string | null;
+  confirmed_tan: string | null;
+  fuzzy_score: number | null;
+  top_candidates: BatchCandidate[];
+}
+
+export interface BatchParty {
+  deductor_name: string;
+  tan: string;
+  entry_count: number;
+}
+
+export interface BatchPreviewResponse {
+  mappings: BatchMapping[];
+  all_parties: BatchParty[];
+}
+
+export interface BatchRunSummary {
+  run_id: string | null;
+  run_number?: number;
+  sap_filename: string;
+  deductor_name: string | null;
+  match_rate_pct?: number;
+  status: string;
+  error?: string;
+}
+
+export interface BatchRunResponse {
+  batch_id: string;
+  runs: BatchRunSummary[];
+  total: number;
+}
+
 export interface AuditEvent {
   id: string;
   event_type: string;
@@ -268,6 +312,31 @@ export const runsApi = {
     form.append('financial_year', financialYear);
     return apiClient
       .post<{ run_id: string; run_number: number; status: RunStatus }>('/api/runs', form)
+      .then((r) => r.data);
+  },
+
+  batchPreview: (sapFiles: File[], as26File: File) => {
+    const form = new FormData();
+    form.append('as26_file', as26File);
+    sapFiles.forEach((f) => form.append('sap_files', f));
+    return apiClient
+      .post<BatchPreviewResponse>('/api/runs/batch/preview', form)
+      .then((r) => r.data);
+  },
+
+  batchRun: (
+    sapFiles: File[],
+    as26File: File,
+    financialYear: string,
+    mappings: Record<string, { deductor_name: string; tan: string }>,
+  ) => {
+    const form = new FormData();
+    form.append('as26_file', as26File);
+    sapFiles.forEach((f) => form.append('sap_files', f));
+    form.append('financial_year', financialYear);
+    form.append('mappings_json', JSON.stringify(mappings));
+    return apiClient
+      .post<BatchRunResponse>('/api/runs/batch', form)
       .then((r) => r.data);
   },
 

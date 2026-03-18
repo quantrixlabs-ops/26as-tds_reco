@@ -85,6 +85,9 @@ async def run_reconciliation(
     sap_filename: str,
     as26_filename: str,
     financial_year: str = DEFAULT_FINANCIAL_YEAR,
+    batch_id: Optional[str] = None,
+    deductor_filter_name: Optional[str] = None,
+    deductor_filter_tan: Optional[str] = None,
 ) -> ReconciliationRun:
     """
     Full reconciliation pipeline. Returns the persisted ReconciliationRun.
@@ -107,7 +110,8 @@ async def run_reconciliation(
         algorithm_version=settings.ALGORITHM_VERSION,
         config_snapshot=_config_snapshot(),
         status="PROCESSING",
-        mode="SINGLE",
+        mode="BATCH" if batch_id else "SINGLE",
+        batch_id=batch_id,
         created_by_id=current_user.id,
         started_at=started_at,
     )
@@ -130,6 +134,13 @@ async def run_reconciliation(
 
         # ── 4. Parse and validate 26AS ────────────────────────────────────────
         as26_df = parse_26as(as26_bytes)
+
+        # In batch mode, filter 26AS to the specific deductor for this SAP file
+        if deductor_filter_name and not as26_df.empty:
+            as26_df = as26_df[as26_df["deductor_name"] == deductor_filter_name].copy()
+        elif deductor_filter_tan and not as26_df.empty:
+            as26_df = as26_df[as26_df["tan"] == deductor_filter_tan].copy()
+
         validated_df, val_report = validate_26as(as26_df)
 
         # SAP book validation (light)
