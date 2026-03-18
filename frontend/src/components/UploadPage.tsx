@@ -97,7 +97,7 @@ export default function UploadPage({ onUpload, isLoading, error }: Props) {
           HRA &amp; Co. / Akurat Advisory
         </div>
         <h1 className="text-3xl font-bold text-slate-900 mb-2">TDS Reconciliation</h1>
-        <p className="text-slate-500 text-sm">Phase 1 — Single file reco</p>
+        <p className="text-slate-500 text-sm">Single Party — One SAP + One 26AS</p>
       </div>
 
       {/* FY Selector */}

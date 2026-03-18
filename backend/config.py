@@ -1,25 +1,46 @@
 """
 Configuration constants for TDS Reconciliation Engine — Phase 1
 All tunable parameters live here. Never hardcode these in business logic.
+
+Revised per Change Request Brief (March 2026) benchmarking FY2023-24 data.
 """
 from __future__ import annotations
 from datetime import date
 from typing import Tuple
 
 # ── Reconciliation Engine ─────────────────────────────────────────────────────
-MAX_COMBO_SIZE: int = 8          # Max invoices in a single combination match
-COMBO_LIMIT: int = 500           # Max combinations tried per 26AS entry (raised for better matching)
+MAX_COMBO_SIZE: int = 5          # Hard cap: enforced in ALL phases (COMBO, FORCE_COMBO, CLR_GROUP)
+                                 # Brief §3: MAX_COMBO_SIZE = 5. Groups > 5 are skipped/logged.
+COMBO_LIMIT: int = 500           # Max combinations tried PER SIZE in Phase B (not shared global)
 EXACT_TOLERANCE: float = 0.01   # ₹ difference threshold for EXACT classification
-VARIANCE_CAP_PCT: float = 5.0   # Phase A/B cap — quality matches only (HIGH/MEDIUM)
-                                 # Phase C (force-match) ignores this cap → LOW confidence
+
+# ── Tier-specific variance ceilings (Brief §3/#4, March 2026) ─────────────────
+# Each match type has its own ceiling. Entries that exceed it remain unmatched.
+VARIANCE_CAP_SINGLE: float = 2.0       # SINGLE: TDS rate rounding + minor deductions
+VARIANCE_CAP_COMBO: float = 3.0        # COMBO_3 to COMBO_5: slightly more tolerance
+VARIANCE_CAP_CLR_GROUP: float = 3.0    # CLR_GROUP: clearing doc linkage adds confidence
+VARIANCE_CAP_FORCE_SINGLE: float = 5.0 # FORCE_SINGLE: last resort, CA review required
+
+# FORCE_COMBO is intentionally restricted (Brief §3/#3):
+# Not eliminated but limited to 2–3 invoices with a tight 2% cap.
+# Prevents statistical "any target can be approximated" abuse.
+FORCE_COMBO_MAX_INVOICES: int = 3      # Max invoices in a FORCE_COMBO match
+FORCE_COMBO_MAX_VARIANCE: float = 2.0  # FORCE_COMBO must be near-exact to be accepted
+
+# ── Cross-FY matching control (Brief §3/#1, P0) ────────────────────────────────
+# When False: Phases A/B/C use ONLY target-FY invoices.
+# Unmatched entries are then tried against prior-FY books in Phase E and tagged
+# PRIOR_YEAR_EXCEPTION with LOW confidence for explicit CA review.
+# Set to True only when the CA explicitly authorises prior-FY matching.
+ALLOW_CROSS_FY: bool = False
 
 # ── Cleaning Pipeline ─────────────────────────────────────────────────────────
 NOISE_THRESHOLD: float = 1.0    # Rows with amount < ₹1 are excluded (keep all meaningful amounts)
 
-# P2: SAP Date Window — include current FY + one prior FY only.
-# For FY2023-24 reco: SAP invoices from Apr 2022 – Mar 2024 are eligible.
-# Invoices AFTER the FY end are excluded (can't be paid before they exist).
-SAP_LOOKBACK_YEARS: int = 1     # How many prior FYs to include in SAP pool
+# SAP Date Window — include current FY + N prior FYs in the raw pool.
+# With ALLOW_CROSS_FY=False, prior-FY entries are held separate (Phase E only).
+# With ALLOW_CROSS_FY=True, all entries in the window are treated equally.
+SAP_LOOKBACK_YEARS: int = 1     # How many prior FYs to load into the books pool
 
 # ── Name Alignment ────────────────────────────────────────────────────────────
 FUZZY_THRESHOLD: int = 80        # Min rapidfuzz score for a valid candidate
@@ -56,9 +77,10 @@ def fy_date_range(fy_label: str) -> Tuple[date, date]:
 
 def sap_date_window(fy_label: str) -> Tuple[date, date]:
     """
-    P2: SAP date window — current FY + N prior FYs.
+    SAP date window — current FY + N prior FYs.
     For FY2023-24 with lookback=1: 01-Apr-2022 → 31-Mar-2024
     Excludes post-FY invoices (can't be paid before they exist).
+    When ALLOW_CROSS_FY=False, prior-FY entries are loaded but held for Phase E only.
     """
     fy_start, fy_end = fy_date_range(fy_label)
     sap_start = date(fy_start.year - SAP_LOOKBACK_YEARS, 4, 1)

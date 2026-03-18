@@ -32,13 +32,14 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # Canonical column name normaliser
-_AMOUNT_ALIASES = re.compile(r"amount\s*paid", re.IGNORECASE)
-_NAME_ALIASES   = re.compile(r"name\s+of\s+deductor", re.IGNORECASE)
-_TAN_ALIASES    = re.compile(r"tan\s+of\s+deductor", re.IGNORECASE)
-_STATUS_ALIASES = re.compile(r"status\s+of\s+booking", re.IGNORECASE)
-_DATE_ALIASES   = re.compile(r"transaction\s+date", re.IGNORECASE)
+# Expanded aliases to handle various 26AS portal formats (FY20-21 through FY25-26)
+_AMOUNT_ALIASES = re.compile(r"amount\s*paid|amount\s*credited|^amount$", re.IGNORECASE)
+_NAME_ALIASES   = re.compile(r"name\s+of\s+deductor|^particulars$|deductor\s*name|^name$", re.IGNORECASE)
+_TAN_ALIASES    = re.compile(r"tan\s+of\s+deductor|^tan$", re.IGNORECASE)
+_STATUS_ALIASES = re.compile(r"status\s+of\s+booking|^status\s+of\b", re.IGNORECASE)
+_DATE_ALIASES   = re.compile(r"transaction\s+date|^date$|date\s+of\s+(payment|credit)", re.IGNORECASE)
 _SECTION_ALIAS  = re.compile(r"^section$", re.IGNORECASE)
-_INVOICE_ALIAS  = re.compile(r"invoice\s+number", re.IGNORECASE)
+_INVOICE_ALIAS  = re.compile(r"invoice\s+number|^invoice\s*no", re.IGNORECASE)
 
 
 def _normalise_col(name: str) -> Optional[str]:
@@ -58,10 +59,21 @@ def _parse_date(val: Any) -> Optional[str]:
         return None
     if isinstance(val, datetime):
         return val.strftime("%d-%b-%Y")
-    try:
-        return pd.to_datetime(str(val), dayfirst=True).strftime("%d-%b-%Y")
-    except Exception:
-        return None  # Reject unparseable dates instead of returning garbage strings
+    if isinstance(val, date):
+        return val.strftime("%d-%b-%Y")
+    s = str(val).strip()
+    if not s:
+        return None
+    # Try multiple formats before giving up
+    for fmt in [None, "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d.%m.%Y", "%m/%d/%Y"]:
+        try:
+            if fmt:
+                return datetime.strptime(s, fmt).strftime("%d-%b-%Y")
+            else:
+                return pd.to_datetime(s, dayfirst=True).strftime("%d-%b-%Y")
+        except Exception:
+            continue
+    return None  # Reject unparseable dates instead of returning garbage strings
 
 
 def _detect_header_row(ws) -> int:
@@ -133,12 +145,14 @@ def parse_26as(
     ))[0]
 
     col_map: dict[int, str] = {}  # 0-based index → canonical name
+    used_canonicals: set[str] = set()  # Prevent duplicate canonical names
     for idx, cell_val in enumerate(header_cells):
         if cell_val is None:
             continue
         canonical = _normalise_col(str(cell_val))
-        if canonical:
+        if canonical and canonical not in used_canonicals:
             col_map[idx] = canonical
+            used_canonicals.add(canonical)
 
     required = {"deductor_name", "tan", "amount", "status"}
     found = set(col_map.values())

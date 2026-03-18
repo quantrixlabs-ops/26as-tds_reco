@@ -142,3 +142,56 @@ class ReconcileResponse(BaseModel):
     download_url: Optional[str] = None
     error_message: Optional[str] = None
     cleaning_report: Optional[CleaningReport] = None
+
+
+# ── Batch Multi-Party Models ─────────────────────────────────────────────────
+
+class PartyMapping(BaseModel):
+    sap_filename: str
+    deductor_name: str = ""
+    tan: str = ""
+    fuzzy_score: float = 0.0
+    status: str = "UNMATCHED"       # AUTO | CONFIRMED | UNMATCHED
+
+
+class BatchMappingResponse(BaseModel):
+    batch_id: str
+    mappings: List[PartyMapping]
+    unmapped_sap_files: List[str]           # SAP files with no 26AS match
+    uncovered_26as_parties: List[dict]       # 26AS parties with no SAP file
+    financial_year: str
+
+
+class BatchConfirmRequest(BaseModel):
+    batch_id: str
+    confirmed_mappings: List[PartyMapping]   # User-confirmed/edited mappings
+
+
+class PartyRecoSummary(BaseModel):
+    deductor_name: str
+    tan: str
+    sap_filename: str
+    match_rate_pct: float = 0.0
+    total_26as_entries: int = 0
+    matched_count: int = 0
+    unmatched_26as_count: int = 0
+    unmatched_books_count: int = 0
+    constraint_violations: int = 0
+    high_confidence_count: int = 0
+    medium_confidence_count: int = 0
+    low_confidence_count: int = 0
+    cross_fy_match_count: int = 0
+    avg_variance_pct: float = 0.0
+    status: str = "SUCCESS"         # SUCCESS | ERROR
+    error_message: str = ""
+    session_id: str = ""
+
+
+class BatchResultResponse(BaseModel):
+    batch_id: str
+    total_parties: int
+    completed: int
+    failed: int
+    party_summaries: List[PartyRecoSummary]
+    download_url: str
+    financial_year: str

@@ -22,7 +22,7 @@ from openpyxl.styles import (
 )
 from openpyxl.utils import get_column_letter
 
-from config import DEFAULT_FINANCIAL_YEAR, VARIANCE_CAP_PCT
+from config import DEFAULT_FINANCIAL_YEAR, VARIANCE_CAP_FORCE_SINGLE as VARIANCE_CAP_PCT
 from models import CleaningReport, MatchedPair, RecoResult, UnmatchedAs26Entry
 
 # ── Colour constants ──────────────────────────────────────────────────────────

@@ -81,22 +81,37 @@ def _build_clean_df(
         return df
 
     final_rows: List[Dict] = []
-    for ref, group in df.groupby("invoice_ref"):
+    for ref, ref_group in df.groupby("invoice_ref"):
         if ref == "":
-            for _, r in group.iterrows():
+            # No invoice ref — deduplication not possible, keep all rows
+            for _, r in ref_group.iterrows():
                 final_rows.append(r.to_dict())
             continue
-        unique_amounts = group["amount"].unique()
-        if len(unique_amounts) == 1:
-            c.dupe += len(group) - 1
-            final_rows.append(group.iloc[0].to_dict())
-        else:
-            c.split_invoices += 1
-            for _, r in group.iterrows():
-                rd = r.to_dict()
-                ef = rd.get("flag", "")
-                rd["flag"] = f"{ef},SPLIT_INVOICE".strip(",") if ef else "SPLIT_INVOICE"
-                final_rows.append(rd)
+
+        # Sub-group by clearing_doc: the same invoice can be settled in
+        # multiple separate clearing events (e.g., partial payments, two
+        # different payment runs). These are DISTINCT entries, not duplicates.
+        # True duplicate = same invoice_ref + same clearing_doc + same amount.
+        for clr_doc, clr_group in ref_group.groupby("clearing_doc", sort=False):
+            if clr_doc == "":
+                # No clearing doc — cannot identify payment event, keep all
+                for _, r in clr_group.iterrows():
+                    final_rows.append(r.to_dict())
+                continue
+
+            unique_amounts = clr_group["amount"].unique()
+            if len(unique_amounts) == 1:
+                # Same invoice + same clearing doc + same amount → true duplicate
+                c.dupe += len(clr_group) - 1
+                final_rows.append(clr_group.iloc[0].to_dict())
+            else:
+                # Same invoice + same clearing doc + different amounts → partial clearing
+                c.split_invoices += 1
+                for _, r in clr_group.iterrows():
+                    rd = r.to_dict()
+                    ef = rd.get("flag", "")
+                    rd["flag"] = f"{ef},SPLIT_INVOICE".strip(",") if ef else "SPLIT_INVOICE"
+                    final_rows.append(rd)
 
     return pd.DataFrame(final_rows).reset_index(drop=True)
 
@@ -169,6 +184,8 @@ def clean_sap_books(
             if not (fy_start <= doc_date <= fy_end):
                 c.date_out_of_fy += 1
                 continue
+        # If doc_date is None but we have a valid amount, KEEP the row
+        # (don't lose matching candidates just because date is unparseable)
 
         # ── Special G/L Indicator gate ──────────────────────────────────────
         sgl = str(row[8]).strip() if row[8] is not None else ""
