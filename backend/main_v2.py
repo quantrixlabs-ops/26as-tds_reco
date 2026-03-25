@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from core.settings import settings
-from db.base import create_all_tables
+from db.base import create_all_tables, auto_migrate
 
 # Configure structured logging
 structlog.configure(
@@ -30,7 +30,22 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("startup", version=settings.APP_VERSION, env=settings.ENVIRONMENT)
     await create_all_tables()
+    await auto_migrate()
     logger.info("database_ready")
+
+    # Clean up orphaned PROCESSING runs from previous server crashes/restarts.
+    # Background asyncio tasks are killed when uvicorn reloads, leaving DB rows stuck.
+    from db.base import AsyncSessionLocal
+    from sqlalchemy import text as sql_text
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            sql_text("UPDATE reconciliation_runs SET status='FAILED' WHERE status='PROCESSING'")
+        )
+        if result.rowcount > 0:
+            logger.warning("orphaned_runs_cleaned", count=result.rowcount)
+
+        await session.commit()
+
     yield
     logger.info("shutdown")
 
@@ -62,9 +77,11 @@ app.add_middleware(
 
 from api.routes.auth import router as auth_router
 from api.routes.runs import router as runs_router
+from api.routes.settings import router as settings_router
 
 app.include_router(auth_router)
 app.include_router(runs_router)
+app.include_router(settings_router)
 
 
 # ── Health + Meta ─────────────────────────────────────────────────────────────

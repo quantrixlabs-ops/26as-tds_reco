@@ -5,12 +5,12 @@ All tables include created_at, updated_at for audit trail.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional, List
 
 from sqlalchemy import (
     String, Float, Boolean, Integer, Text, Date, DateTime,
-    ForeignKey, Enum, Index, UniqueConstraint, JSON
+    ForeignKey, Enum, Index, UniqueConstraint, JSON, LargeBinary
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -20,6 +20,10 @@ from db.base import Base
 
 def _uuid() -> str:
     return str(uuid.uuid4())
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # ── Users & Auth ──────────────────────────────────────────────────────────────
@@ -84,6 +88,11 @@ class ReconciliationRun(Base):
     as26_file_hash: Mapped[str] = mapped_column(String(64), nullable=False)  # SHA-256
     output_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
+    # File storage for replay (original bytes, enables rerun without re-upload)
+    sap_file_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    as26_file_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    deductor_filter_parties: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # [{deductor_name, tan}]
+
     # Versioning
     algorithm_version: Mapped[str] = mapped_column(String(20), nullable=False)
     config_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # config.py state at run time
@@ -110,6 +119,10 @@ class ReconciliationRun(Base):
     medium_confidence_count: Mapped[int] = mapped_column(Integer, default=0)
     low_confidence_count: Mapped[int] = mapped_column(Integer, default=0)
     constraint_violations: Mapped[int] = mapped_column(Integer, default=0)
+    suggested_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Per-run config overrides (snapshot of AdminSettings at run time)
+    run_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     # Control totals
     total_26as_amount: Mapped[float] = mapped_column(Float, default=0.0)
@@ -142,6 +155,7 @@ class ReconciliationRun(Base):
     unmatched_books: Mapped[List["UnmatchedBook"]] = relationship("UnmatchedBook", back_populates="run", cascade="all, delete-orphan")
     audit_logs: Mapped[List["AuditLog"]] = relationship("AuditLog", back_populates="run")
     exceptions: Mapped[List["ExceptionRecord"]] = relationship("ExceptionRecord", back_populates="run", cascade="all, delete-orphan")
+    suggested_matches: Mapped[List["SuggestedMatch"]] = relationship("SuggestedMatch", back_populates="run", cascade="all, delete-orphan")
 
 
 # ── Core Match Data ───────────────────────────────────────────────────────────
@@ -201,6 +215,9 @@ class MatchedPair(Base):
 
     # Alternatives — top 3 other valid candidates, stored as JSON
     alternative_matches: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
+    # Remark — auto-generated when promoted from suggested match with high variance
+    remark: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -324,6 +341,123 @@ class AuditLog(Base):
 
     run: Mapped[Optional["ReconciliationRun"]] = relationship("ReconciliationRun", back_populates="audit_logs")
     user: Mapped[Optional["User"]] = relationship("User", back_populates="audit_logs")
+
+
+# ── Run Counter ───────────────────────────────────────────────────────────────
+
+# ── Admin Settings ────────────────────────────────────────────────────────────
+
+class AdminSettings(Base):
+    """
+    Singleton-with-history pattern: only one row has is_active=True at a time.
+    Each update creates a new row and deactivates the previous one, preserving full audit history.
+    """
+    __tablename__ = "admin_settings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    # Document Filters
+    doc_types_include: Mapped[Optional[list]] = mapped_column(JSON, default=lambda: ["RV", "DR"])
+    doc_types_exclude: Mapped[Optional[list]] = mapped_column(JSON, default=lambda: ["CC", "BR"])
+
+    # Date Rules
+    date_hard_cutoff_days: Mapped[int] = mapped_column(Integer, default=90)
+    date_soft_preference_days: Mapped[int] = mapped_column(Integer, default=180)
+    enforce_books_before_26as: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Variance Thresholds
+    variance_normal_ceiling_pct: Mapped[float] = mapped_column(Float, default=3.0)
+    variance_suggested_ceiling_pct: Mapped[float] = mapped_column(Float, default=20.0)
+
+    # Advance Payment
+    exclude_sgl_v: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Combo Settings
+    max_combo_size: Mapped[int] = mapped_column(Integer, default=0)  # 0 = unlimited
+    date_clustering_preference: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Cross-FY
+    allow_cross_fy: Mapped[bool] = mapped_column(Boolean, default=False)
+    cross_fy_lookback_years: Mapped[int] = mapped_column(Integer, default=1)
+
+    # Force Match
+    force_match_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Noise
+    noise_threshold: Mapped[float] = mapped_column(Float, default=1.0)
+
+    # Metadata
+    updated_by_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+# ── Suggested Matches ────────────────────────────────────────────────────────
+
+class SuggestedMatch(Base):
+    """
+    Matches that fall outside normal auto-match criteria but are worth presenting
+    to the reviewer for manual authorization. Categories include high-variance,
+    date-soft-preference violations, advance payments, and force matches.
+    """
+    __tablename__ = "suggested_matches"
+    __table_args__ = (
+        Index("ix_suggested_matches_run_id", "run_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    run_id: Mapped[str] = mapped_column(String(36), ForeignKey("reconciliation_runs.id", ondelete="CASCADE"), nullable=False)
+
+    # 26AS side
+    as26_row_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    as26_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    as26_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    as26_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    section: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    tan: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    deductor_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # Books side
+    invoice_refs: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    invoice_amounts: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    invoice_dates: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    clearing_doc: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    books_sum: Mapped[float] = mapped_column(Float, default=0)
+
+    # Match quality
+    match_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    variance_amt: Mapped[float] = mapped_column(Float, default=0)
+    variance_pct: Mapped[float] = mapped_column(Float, default=0)
+    confidence: Mapped[str] = mapped_column(String(10), default="LOW")
+    composite_score: Mapped[float] = mapped_column(Float, default=0)
+    score_variance: Mapped[float] = mapped_column(Float, default=0)
+    score_date_proximity: Mapped[float] = mapped_column(Float, default=0)
+    score_section_match: Mapped[float] = mapped_column(Float, default=0)
+    score_clearing_doc: Mapped[float] = mapped_column(Float, default=0)
+    score_historical: Mapped[float] = mapped_column(Float, default=0)
+    cross_fy: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_prior_year: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Suggested-specific
+    category: Mapped[str] = mapped_column(String(50), nullable=False)  # HIGH_VARIANCE_3_20, HIGH_VARIANCE_20_PLUS, DATE_SOFT_PREFERENCE, ADVANCE_PAYMENT, FORCE
+    requires_remarks: Mapped[bool] = mapped_column(Boolean, default=False)
+    alert_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Authorization workflow
+    authorized: Mapped[bool] = mapped_column(Boolean, default=False)
+    authorized_by_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    authorized_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rejected: Mapped[bool] = mapped_column(Boolean, default=False)
+    rejected_by_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    rejected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    # Relationships
+    run: Mapped["ReconciliationRun"] = relationship("ReconciliationRun", back_populates="suggested_matches")
 
 
 # ── Run Counter ───────────────────────────────────────────────────────────────

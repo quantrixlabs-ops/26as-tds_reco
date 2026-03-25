@@ -3,7 +3,7 @@
  */
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, addMinutes } from 'date-fns';
 import type { RunStatus, ConfidenceTier, ExceptionSeverity } from './api';
 
 // ── Tailwind class merge ───────────────────────────────────────────────────────
@@ -36,20 +36,25 @@ export function formatPct(value: number | null | undefined, decimals = 2): strin
 
 // ── Date formatting ───────────────────────────────────────────────────────────
 
+/**
+ * Convert a UTC ISO string to IST (UTC+5:30) and format it.
+ */
 export function formatDate(
   value: string | null | undefined,
   fmt = 'dd MMM yyyy',
 ): string {
   if (!value) return '—';
   try {
-    return format(parseISO(value), fmt);
+    const utc = parseISO(value);
+    const ist = addMinutes(utc, 330); // UTC+5:30 = +330 minutes
+    return format(ist, fmt);
   } catch {
     return value;
   }
 }
 
 export function formatDateTime(value: string | null | undefined): string {
-  return formatDate(value, 'dd MMM yyyy, HH:mm');
+  return formatDate(value, 'dd MMM yyyy, HH:mm') + ' IST';
 }
 
 // ── FY helpers ────────────────────────────────────────────────────────────────

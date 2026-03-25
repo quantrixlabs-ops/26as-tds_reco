@@ -14,13 +14,31 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from rapidfuzz import fuzz, process
 
+from pydantic import BaseModel
+
 from config import (
     AUTO_CONFIRM_SCORE,
     FUZZY_THRESHOLD,
     SESSION_TTL_SECONDS,
     TOP_N_CANDIDATES,
 )
-from models import AlignmentResult, DeductorCandidate
+
+
+class DeductorCandidate(BaseModel):
+    rank: int
+    deductor_name: str
+    tan: str
+    score: float
+    entry_count: int
+
+
+class AlignmentResult(BaseModel):
+    status: str                 # AUTO_CONFIRMED | PENDING | NO_MATCH
+    identity_string: str
+    top_candidates: List[DeductorCandidate]
+    confirmed_name: Optional[str] = None
+    confirmed_tan: Optional[str] = None
+    fuzzy_score: Optional[float] = None
 
 logger = logging.getLogger(__name__)
 

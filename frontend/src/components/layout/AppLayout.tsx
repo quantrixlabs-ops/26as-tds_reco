@@ -6,6 +6,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   FolderOpen,
+  Layers,
   PlusCircle,
   ShieldCheck,
   LogOut,
@@ -35,6 +36,11 @@ const navItems: NavItem[] = [
     to: '/runs',
     label: 'Run History',
     icon: <FolderOpen className="h-4 w-4" />,
+  },
+  {
+    to: '/runs/batch',
+    label: 'Batch History',
+    icon: <Layers className="h-4 w-4" />,
   },
   {
     to: '/runs/new',

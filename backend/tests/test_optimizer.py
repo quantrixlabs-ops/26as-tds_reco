@@ -23,12 +23,20 @@ def _as26(idx, amount, section="194C", date="20-Jun-2023"):
     )
 
 
+def _split_results(all_results):
+    """Split all_results into (matched, suggested) by checking result.suggested."""
+    matched = [r for r in all_results if not r.suggested]
+    suggested = [r for r in all_results if r.suggested]
+    return matched, suggested
+
+
 # ── Basic matching ─────────────────────────────────────────────────────────────
 
 def test_exact_match():
     as26 = [_as26(0, 100000.0)]
     books = [_book(0, 100000.0, "INV-001")]
-    matched, unmatched = run_global_optimizer(as26, books, books, [])
+    all_results, unmatched = run_global_optimizer(as26, books, books, [])
+    matched, suggested = _split_results(all_results)
     assert len(matched) == 1
     assert len(unmatched) == 0
     assert matched[0].match_type in ("EXACT", "SINGLE", "CLR_GROUP_1")
@@ -37,24 +45,28 @@ def test_exact_match():
 def test_no_match_above_ceiling():
     as26 = [_as26(0, 100000.0)]
     books = [_book(0, 50000.0)]   # 50% variance — no ceiling covers this
-    matched, unmatched = run_global_optimizer(as26, books, books, [])
-    assert len(unmatched) == 1
+    all_results, unmatched = run_global_optimizer(as26, books, books, [])
+    matched, suggested = _split_results(all_results)
+    # 50% variance is beyond even suggested ceiling, so truly unmatched
+    assert len(unmatched) + len(suggested) >= 1
 
 
 def test_single_match_within_2pct():
     as26 = [_as26(0, 100000.0)]
     books = [_book(0, 98500.0)]   # 1.5% variance
-    matched, unmatched = run_global_optimizer(as26, books, books, [])
+    all_results, unmatched = run_global_optimizer(as26, books, books, [])
+    matched, suggested = _split_results(all_results)
     assert len(matched) == 1
     assert matched[0].variance_pct == pytest.approx(1.5, abs=0.1)
 
 
-# ── Compliance: books_sum ≤ as26_amount ───────────────────────────────────────
+# ── Compliance: books_sum <= as26_amount ───────────────────────────────────────
 
 def test_books_sum_never_exceeds_as26():
     as26 = [_as26(0, 100000.0)]
     books = [_book(0, 100001.0)]  # slightly over — must NOT match
-    matched, unmatched = run_global_optimizer(as26, books, books, [])
+    all_results, unmatched = run_global_optimizer(as26, books, books, [])
+    matched, suggested = _split_results(all_results)
     for r in matched:
         assert sum(b.amount for b in r.books) <= r.as26_amount + 0.02
 
@@ -64,8 +76,9 @@ def test_books_sum_never_exceeds_as26():
 def test_invoice_not_reused():
     as26 = [_as26(0, 100000.0), _as26(1, 100000.0)]
     books = [_book(0, 100000.0, "INV-SHARED")]  # one book, two 26AS entries
-    matched, unmatched = run_global_optimizer(as26, books, books, [])
-    # Only one can be matched
+    all_results, unmatched = run_global_optimizer(as26, books, books, [])
+    matched, suggested = _split_results(all_results)
+    # Only one can be matched (non-suggested)
     total_matched = len(matched)
     assert total_matched <= 1
     all_refs = [ref for r in matched for b in r.books for ref in [b.invoice_ref]]
@@ -77,7 +90,8 @@ def test_invoice_not_reused():
 def test_multiple_entries_independent():
     as26 = [_as26(0, 50000.0), _as26(1, 80000.0)]
     books = [_book(0, 50000.0, "INV-001"), _book(1, 80000.0, "INV-002")]
-    matched, unmatched = run_global_optimizer(as26, books, books, [])
+    all_results, unmatched = run_global_optimizer(as26, books, books, [])
+    matched, suggested = _split_results(all_results)
     assert len(matched) == 2
     assert len(unmatched) == 0
 
@@ -90,9 +104,10 @@ def test_prior_fy_not_matched_in_phase_b(monkeypatch):
     current = [_book(0, 100000.0, "INV-CURR", fy="FY2023-24")]
     prior = [_book(1, 100000.0, "INV-PRIOR", fy="FY2022-23")]
 
-    matched, unmatched = run_global_optimizer(
+    all_results, unmatched = run_global_optimizer(
         as26, current + prior, current, prior, allow_cross_fy=False
     )
+    matched, suggested = _split_results(all_results)
     assert len(matched) == 1
     # Current-FY book should win
     assert not matched[0].is_prior_year

@@ -1,7 +1,7 @@
 /**
  * RunDetailPage — full run detail with tabs: Matched / Unmatched 26AS / Unmatched Books / Exceptions / Audit Trail
  */
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
@@ -15,12 +15,17 @@ import {
   BookOpen,
   ClipboardList,
   Activity,
+  Trash2,
+  StopCircle,
+  Lightbulb,
+  ChevronRight,
+  ChevronDown,
+  PieChart,
+  ListChecks,
+  FileText,
 } from 'lucide-react';
 import {
   runsApi,
-  type MatchedPair,
-  type Unmatched26AS,
-  type UnmatchedBook,
   type Exception,
   type RunSummary,
 } from '../lib/api';
@@ -30,6 +35,7 @@ import { Card, StatCard } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Table, type Column } from '../components/ui/Table';
 import { FullPageSpinner } from '../components/ui/Spinner';
+import { RunProgressPanel } from '../components/RunProgressPanel';
 import {
   cn,
   formatDate,
@@ -44,6 +50,10 @@ import {
   getErrorMessage,
   truncate,
 } from '../lib/utils';
+import SectionSummaryTab from '../components/SectionSummaryTab';
+import MismatchTrackerTab from '../components/MismatchTrackerTab';
+import MatchingMethodologyPanel from '../components/MatchingMethodologyPanel';
+import SuggestedMatchesTab from '../components/SuggestedMatchesTab';
 
 // ── Metadata card ─────────────────────────────────────────────────────────────
 
@@ -103,77 +113,11 @@ function MatchedTab({ runId }: { runId: string }) {
     queryKey: ['runs', runId, 'matched'],
     queryFn: () => runsApi.matched(runId),
   });
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
 
-  const cols: Column<MatchedPair>[] = [
-    {
-      key: 'as26_index',
-      header: '26AS #',
-      render: (r) => <span className="font-mono text-xs text-gray-500">#{r.as26_index}</span>,
-    },
-    {
-      key: 'as26_date',
-      header: 'Date',
-      render: (r) => <span className="text-xs">{formatDate(r.as26_date)}</span>,
-    },
-    {
-      key: 'section',
-      header: 'Section',
-      render: (r) => <span className="font-mono text-xs">{r.section}</span>,
-    },
-    {
-      key: 'as26_amount',
-      header: '26AS Amount',
-      align: 'right',
-      sortable: true,
-      render: (r) => <span className="font-mono text-xs">{formatCurrency(r.as26_amount)}</span>,
-    },
-    {
-      key: 'books_sum',
-      header: 'Books Sum',
-      align: 'right',
-      sortable: true,
-      render: (r) => <span className="font-mono text-xs">{formatCurrency(r.books_sum)}</span>,
-    },
-    {
-      key: 'variance_pct',
-      header: 'Variance',
-      align: 'right',
-      sortable: true,
-      render: (r) => (
-        <span
-          className={cn(
-            'font-mono text-xs',
-            r.variance_pct > 3 ? 'text-red-600' : r.variance_pct > 1 ? 'text-amber-600' : 'text-gray-700',
-          )}
-        >
-          {formatPct(r.variance_pct)}
-        </span>
-      ),
-    },
-    {
-      key: 'match_type',
-      header: 'Type',
-      render: (r) => <span className="font-mono text-xs text-gray-600">{r.match_type}</span>,
-    },
-    {
-      key: 'confidence',
-      header: 'Confidence',
-      render: (r) => (
-        <Badge variant={confidenceVariant(r.confidence)} size="sm">
-          {r.confidence}
-        </Badge>
-      ),
-    },
-    {
-      key: 'invoice_refs',
-      header: 'Invoices',
-      render: (r) => (
-        <span className="text-xs text-gray-500" title={r.invoice_refs.join(', ')}>
-          {r.invoice_count} inv
-        </span>
-      ),
-    },
-  ];
+  const toggleRow = (idx: number) => {
+    setExpandedRow(expandedRow === idx ? null : idx);
+  };
 
   return (
     <Card padding={false}>
@@ -182,13 +126,202 @@ function MatchedTab({ runId }: { runId: string }) {
           {data.length} matched pairs · books_sum ≤ 26AS amount (Section 199)
         </p>
       </div>
-      <Table
-        columns={cols}
-        data={data}
-        keyExtractor={(_r, i) => `matched-${i}`}
-        loading={isLoading}
-        emptyMessage="No matched pairs found"
-      />
+      <div className="w-full overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="border-b border-gray-200 bg-gray-50">
+            <tr>
+              <th className="px-2 py-3 w-8" />
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">26AS #</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Date</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Section</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-right whitespace-nowrap">26AS Amount</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-right whitespace-nowrap">Books Sum</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-right whitespace-nowrap">Variance</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Type</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Confidence</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Invoices</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {isLoading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i}>
+                  {Array.from({ length: 10 }).map((_, j) => (
+                    <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>
+                  ))}
+                </tr>
+              ))
+            ) : data.length === 0 ? (
+              <tr>
+                <td colSpan={10} className="px-4 py-12 text-center text-gray-400 text-sm">No matched pairs found</td>
+              </tr>
+            ) : (
+              data.map((r, idx) => (
+                <Fragment key={`matched-${idx}`}>
+                  <tr
+                    className="hover:bg-gray-50 transition-colors cursor-pointer"
+                    onClick={() => toggleRow(idx)}
+                  >
+                    <td className="px-2 py-3 text-gray-400">
+                      {expandedRow === idx
+                        ? <ChevronDown className="h-4 w-4 text-[#1B3A5C]" />
+                        : <ChevronRight className="h-4 w-4" />}
+                    </td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs text-gray-500">#{r.as26_index}</span></td>
+                    <td className="px-4 py-3"><span className="text-xs">{formatDate(r.as26_date)}</span></td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs">{r.section}</span></td>
+                    <td className="px-4 py-3 text-right"><span className="font-mono text-xs">{formatCurrency(r.as26_amount)}</span></td>
+                    <td className="px-4 py-3 text-right"><span className="font-mono text-xs">{formatCurrency(r.books_sum)}</span></td>
+                    <td className="px-4 py-3 text-right">
+                      <span className={cn('font-mono text-xs', r.variance_pct > 3 ? 'text-red-600' : r.variance_pct > 1 ? 'text-amber-600' : 'text-gray-700')}>
+                        {formatPct(r.variance_pct)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs text-gray-600">{r.match_type}</span></td>
+                    <td className="px-4 py-3">
+                      <Badge variant={confidenceVariant(r.confidence)} size="sm">{r.confidence}</Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs text-gray-500" title={r.invoice_refs.join(', ')}>{r.invoice_count} inv</span>
+                    </td>
+                  </tr>
+                  {expandedRow === idx && (
+                    <tr key={`matched-detail-${idx}`} className="bg-gray-50/70">
+                      <td colSpan={10} className="px-0 py-0">
+                        <div className="border-l-4 border-[#1B3A5C] mx-4 my-3 bg-white rounded-lg shadow-sm overflow-hidden">
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
+                            {/* Invoice Details */}
+                            <div className="p-4">
+                              <p className="text-xs font-semibold text-[#1B3A5C] uppercase tracking-wider mb-2">Invoice Details</p>
+                              {r.invoice_refs.length > 0 ? (
+                                <div className="space-y-1.5">
+                                  {r.invoice_refs.map((ref, i) => (
+                                    <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                                      <span className="font-mono text-gray-800 truncate" title={ref}>{ref}</span>
+                                      <div className="flex items-center gap-2 shrink-0 text-gray-500">
+                                        {r.invoice_amounts?.[i] != null && (
+                                          <span className="font-mono">{formatCurrency(r.invoice_amounts[i])}</span>
+                                        )}
+                                        {r.invoice_dates?.[i] && (
+                                          <span>{formatDate(r.invoice_dates[i])}</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-gray-400">No invoice details</p>
+                              )}
+                              {r.clearing_doc && (
+                                <div className="mt-3 pt-2 border-t border-gray-100">
+                                  <span className="text-xs text-gray-400">Clearing Doc: </span>
+                                  <span className="text-xs font-mono text-gray-700">{r.clearing_doc}</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Score Breakdown */}
+                            <div className="p-4">
+                              <p className="text-xs font-semibold text-[#1B3A5C] uppercase tracking-wider mb-2">Score Breakdown</p>
+                              {r.composite_score != null && (
+                                <div className="flex items-center gap-2 mb-2">
+                                  <span className="text-xs text-gray-400">Composite:</span>
+                                  <span className="text-sm font-bold text-[#1B3A5C]">{r.composite_score.toFixed(1)}</span>
+                                </div>
+                              )}
+                              {r.score_breakdown ? (
+                                <div className="space-y-1.5">
+                                  {[
+                                    { label: 'Variance', value: r.score_breakdown.variance },
+                                    { label: 'Date Proximity', value: r.score_breakdown.date_proximity },
+                                    { label: 'Section Match', value: r.score_breakdown.section },
+                                    { label: 'Clearing Doc', value: r.score_breakdown.clearing_doc },
+                                    { label: 'Historical', value: r.score_breakdown.historical },
+                                  ].map((s) => (
+                                    <div key={s.label} className="flex items-center gap-2">
+                                      <span className="text-xs text-gray-500 w-24">{s.label}</span>
+                                      <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                        <div
+                                          className="h-full bg-[#1B3A5C] rounded-full"
+                                          style={{ width: `${Math.min(100, (s.value ?? 0) * 100)}%` }}
+                                        />
+                                      </div>
+                                      <span className="text-xs font-mono text-gray-600 w-10 text-right">
+                                        {s.value != null ? (s.value * 100).toFixed(0) + '%' : '--'}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-gray-400">No score breakdown available</p>
+                              )}
+                            </div>
+
+                            {/* Match Flags */}
+                            <div className="p-4">
+                              <p className="text-xs font-semibold text-[#1B3A5C] uppercase tracking-wider mb-2">Match Info</p>
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-gray-500">Match Type</span>
+                                  <span className="font-mono font-medium text-gray-800">{r.match_type}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-gray-500">Confidence</span>
+                                  <Badge variant={confidenceVariant(r.confidence)} size="sm">{r.confidence}</Badge>
+                                </div>
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-gray-500">Variance Amount</span>
+                                  <span className="font-mono text-gray-700">{formatCurrency(r.variance_amt)}</span>
+                                </div>
+                                {r.cross_fy != null && (
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-gray-500">Cross-FY</span>
+                                    {r.cross_fy
+                                      ? <Badge variant="orange" size="sm">Yes</Badge>
+                                      : <span className="text-gray-400">No</span>}
+                                  </div>
+                                )}
+                                {r.is_prior_year != null && (
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-gray-500">Prior Year</span>
+                                    {r.is_prior_year
+                                      ? <Badge variant="yellow" size="sm">Yes</Badge>
+                                      : <span className="text-gray-400">No</span>}
+                                  </div>
+                                )}
+                                {r.ai_risk_flag && (
+                                  <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-md">
+                                    <div className="flex items-center gap-1.5 mb-1">
+                                      <AlertTriangle className="h-3 w-3 text-red-500" />
+                                      <span className="text-xs font-semibold text-red-700">AI Risk Flag</span>
+                                    </div>
+                                    {r.ai_risk_reason && (
+                                      <p className="text-xs text-red-600">{r.ai_risk_reason}</p>
+                                    )}
+                                  </div>
+                                )}
+                                {r.remark && (
+                                  <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-md">
+                                    <div className="flex items-center gap-1.5 mb-1">
+                                      <AlertTriangle className="h-3 w-3 text-amber-500" />
+                                      <span className="text-xs font-semibold text-amber-700">Audit Remark</span>
+                                    </div>
+                                    <p className="text-xs text-amber-700">{r.remark}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }
@@ -200,35 +333,11 @@ function Unmatched26ASTab({ runId }: { runId: string }) {
     queryKey: ['runs', runId, 'unmatched-26as'],
     queryFn: () => runsApi.unmatched26as(runId),
   });
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
 
-  const cols: Column<Unmatched26AS>[] = [
-    {
-      key: 'index',
-      header: '#',
-      render: (r) => <span className="font-mono text-xs text-gray-400">#{r.index}</span>,
-    },
-    { key: 'deductor_name', header: 'Deductor', render: (r) => <span className="text-sm">{truncate(r.deductor_name, 30)}</span> },
-    { key: 'tan', header: 'TAN', render: (r) => <span className="font-mono text-xs">{r.tan}</span> },
-    { key: 'section', header: 'Section', render: (r) => <span className="font-mono text-xs">{r.section}</span> },
-    { key: 'date', header: 'Date', render: (r) => <span className="text-xs">{formatDate(r.date)}</span> },
-    {
-      key: 'amount',
-      header: 'Amount',
-      align: 'right',
-      sortable: true,
-      render: (r) => <span className="font-mono text-xs">{formatCurrency(r.amount)}</span>,
-    },
-    {
-      key: 'reason_code',
-      header: 'Reason',
-      render: (r) => (
-        <div>
-          <span className="font-mono text-xs text-red-600">{r.reason_code}</span>
-          <p className="text-xs text-gray-400">{r.reason_label}</p>
-        </div>
-      ),
-    },
-  ];
+  const toggleRow = (idx: number) => {
+    setExpandedRow(expandedRow === idx ? null : idx);
+  };
 
   return (
     <Card padding={false}>
@@ -236,13 +345,102 @@ function Unmatched26ASTab({ runId }: { runId: string }) {
         <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
         <p className="text-xs text-gray-500">{data.length} unmatched 26AS entries</p>
       </div>
-      <Table
-        columns={cols}
-        data={data}
-        keyExtractor={(_r, i) => `u26-${i}`}
-        loading={isLoading}
-        emptyMessage="All 26AS entries matched"
-      />
+      <div className="w-full overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="border-b border-gray-200 bg-gray-50">
+            <tr>
+              <th className="px-2 py-3 w-8" />
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">#</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Deductor</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">TAN</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Section</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Date</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-right whitespace-nowrap">Amount</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Reason</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {isLoading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i}>
+                  {Array.from({ length: 8 }).map((_, j) => (
+                    <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>
+                  ))}
+                </tr>
+              ))
+            ) : data.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="px-4 py-12 text-center text-gray-400 text-sm">All 26AS entries matched</td>
+              </tr>
+            ) : (
+              data.map((r, idx) => (
+                <Fragment key={`u26-${idx}`}>
+                  <tr
+                    className="hover:bg-gray-50 transition-colors cursor-pointer"
+                    onClick={() => toggleRow(idx)}
+                  >
+                    <td className="px-2 py-3 text-gray-400">
+                      {expandedRow === idx
+                        ? <ChevronDown className="h-4 w-4 text-[#1B3A5C]" />
+                        : <ChevronRight className="h-4 w-4" />}
+                    </td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs text-gray-400">#{r.index}</span></td>
+                    <td className="px-4 py-3"><span className="text-sm">{truncate(r.deductor_name, 30)}</span></td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs">{r.tan}</span></td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs">{r.section}</span></td>
+                    <td className="px-4 py-3"><span className="text-xs">{formatDate(r.date ?? r.transaction_date)}</span></td>
+                    <td className="px-4 py-3 text-right"><span className="font-mono text-xs">{formatCurrency(r.amount)}</span></td>
+                    <td className="px-4 py-3">
+                      <div>
+                        <span className="font-mono text-xs text-red-600">{r.reason_code}</span>
+                        <p className="text-xs text-gray-400">{r.reason_label}</p>
+                      </div>
+                    </td>
+                  </tr>
+                  {expandedRow === idx && (
+                    <tr key={`u26-detail-${idx}`} className="bg-gray-50/70">
+                      <td colSpan={8} className="px-0 py-0">
+                        <div className="border-l-4 border-[#1B3A5C] mx-4 my-3 bg-white rounded-lg shadow-sm p-4">
+                          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Full Deductor Name</p>
+                              <p className="text-sm font-medium text-gray-900">{r.deductor_name}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">TAN</p>
+                              <p className="font-mono text-sm text-gray-800">{r.tan}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Section</p>
+                              <p className="font-mono text-sm text-gray-800">{r.section}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Amount</p>
+                              <p className="font-mono text-sm font-semibold text-[#1B3A5C]">{formatCurrency(r.amount)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Transaction Date</p>
+                              <p className="text-sm text-gray-800">{formatDate(r.date ?? r.transaction_date) || '--'}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Reason Code</p>
+                              <p className="font-mono text-sm font-semibold text-red-600">{r.reason_code}</p>
+                            </div>
+                            <div className="col-span-2">
+                              <p className="text-xs text-gray-400 mb-0.5">Reason Detail</p>
+                              <p className="text-sm text-gray-700">{r.reason_detail || r.reason_label || '--'}</p>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }
@@ -254,43 +452,108 @@ function UnmatchedBooksTab({ runId }: { runId: string }) {
     queryKey: ['runs', runId, 'unmatched-books'],
     queryFn: () => runsApi.unmatchedBooks(runId),
   });
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
 
-  const cols: Column<UnmatchedBook>[] = [
-    { key: 'invoice_ref', header: 'Invoice Ref', render: (r) => <span className="font-mono text-xs">{r.invoice_ref}</span> },
-    { key: 'clearing_doc', header: 'Clearing Doc', render: (r) => <span className="font-mono text-xs text-gray-500">{r.clearing_doc}</span> },
-    { key: 'doc_date', header: 'Doc Date', render: (r) => <span className="text-xs">{formatDate(r.doc_date)}</span> },
-    {
-      key: 'amount',
-      header: 'Amount',
-      align: 'right',
-      sortable: true,
-      render: (r) => <span className="font-mono text-xs">{formatCurrency(r.amount)}</span>,
-    },
-    { key: 'doc_type', header: 'Doc Type', render: (r) => <span className="font-mono text-xs">{r.doc_type}</span> },
-    {
-      key: 'sgl_flag',
-      header: 'SGL Flag',
-      render: (r) =>
-        r.sgl_flag ? (
-          <Badge variant="yellow" size="sm">{r.sgl_flag}</Badge>
-        ) : (
-          <span className="text-xs text-gray-300">—</span>
-        ),
-    },
-  ];
+  const toggleRow = (idx: number) => {
+    setExpandedRow(expandedRow === idx ? null : idx);
+  };
 
   return (
     <Card padding={false}>
       <div className="px-4 py-3 border-b border-gray-100">
         <p className="text-xs text-gray-500">{data.length} unmatched SAP book entries</p>
       </div>
-      <Table
-        columns={cols}
-        data={data}
-        keyExtractor={(_r, i) => `ub-${i}`}
-        loading={isLoading}
-        emptyMessage="No unmatched book entries"
-      />
+      <div className="w-full overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="border-b border-gray-200 bg-gray-50">
+            <tr>
+              <th className="px-2 py-3 w-8" />
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Invoice Ref</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Clearing Doc</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Doc Date</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-right whitespace-nowrap">Amount</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">Doc Type</th>
+              <th className="px-4 py-3 font-semibold text-xs text-gray-500 uppercase tracking-wider text-left whitespace-nowrap">SGL Flag</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {isLoading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i}>
+                  {Array.from({ length: 7 }).map((_, j) => (
+                    <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>
+                  ))}
+                </tr>
+              ))
+            ) : data.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-4 py-12 text-center text-gray-400 text-sm">No unmatched book entries</td>
+              </tr>
+            ) : (
+              data.map((r, idx) => (
+                <Fragment key={`ub-${idx}`}>
+                  <tr
+                    className="hover:bg-gray-50 transition-colors cursor-pointer"
+                    onClick={() => toggleRow(idx)}
+                  >
+                    <td className="px-2 py-3 text-gray-400">
+                      {expandedRow === idx
+                        ? <ChevronDown className="h-4 w-4 text-[#1B3A5C]" />
+                        : <ChevronRight className="h-4 w-4" />}
+                    </td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs">{truncate(r.invoice_ref, 24)}</span></td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs text-gray-500">{r.clearing_doc}</span></td>
+                    <td className="px-4 py-3"><span className="text-xs">{formatDate(r.doc_date)}</span></td>
+                    <td className="px-4 py-3 text-right"><span className="font-mono text-xs">{formatCurrency(r.amount)}</span></td>
+                    <td className="px-4 py-3"><span className="font-mono text-xs">{r.doc_type}</span></td>
+                    <td className="px-4 py-3">
+                      {r.sgl_flag
+                        ? <Badge variant="yellow" size="sm">{r.sgl_flag}</Badge>
+                        : <span className="text-xs text-gray-300">—</span>}
+                    </td>
+                  </tr>
+                  {expandedRow === idx && (
+                    <tr key={`ub-detail-${idx}`} className="bg-gray-50/70">
+                      <td colSpan={7} className="px-0 py-0">
+                        <div className="border-l-4 border-[#1B3A5C] mx-4 my-3 bg-white rounded-lg shadow-sm p-4">
+                          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Full Invoice Ref</p>
+                              <p className="font-mono text-sm font-medium text-gray-900 break-all">{r.invoice_ref}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Clearing Document</p>
+                              <p className="font-mono text-sm text-gray-800">{r.clearing_doc || '--'}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Amount</p>
+                              <p className="font-mono text-sm font-semibold text-[#1B3A5C]">{formatCurrency(r.amount)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Document Type</p>
+                              <p className="font-mono text-sm text-gray-800">{r.doc_type || '--'}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">Document Date</p>
+                              <p className="text-sm text-gray-800">{formatDate(r.doc_date) || '--'}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-400 mb-0.5">SGL Flag</p>
+                              {r.sgl_flag
+                                ? <Badge variant="yellow" size="sm">{r.sgl_flag}</Badge>
+                                : <p className="text-sm text-gray-400">None</p>}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }
@@ -506,8 +769,29 @@ export default function RunDetailPage() {
     onError: (err) => toast('Review failed', getErrorMessage(err), 'error'),
   });
 
+  const cancelMut = useMutation({
+    mutationFn: () => runsApi.cancel(id!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['runs', id] });
+      qc.invalidateQueries({ queryKey: ['runs'] });
+      toast('Run cancelled', undefined, 'info');
+    },
+    onError: (err) => toast('Cancel failed', getErrorMessage(err), 'error'),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: () => runsApi.delete(id!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['runs'] });
+      toast('Run deleted', undefined, 'info');
+      navigate('/runs');
+    },
+    onError: (err) => toast('Delete failed', getErrorMessage(err), 'error'),
+  });
+
   const [rejectNotes, setRejectNotes] = useState('');
   const [showReject, setShowReject] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   if (isLoading || !run) return <FullPageSpinner message="Loading run…" />;
 
@@ -556,16 +840,64 @@ export default function RunDetailPage() {
             <RefreshCw className="h-4 w-4" />
           </button>
 
+          {/* Stop — visible during PROCESSING */}
+          {run.status === 'PROCESSING' && (
+            <button
+              onClick={() => cancelMut.mutate()}
+              disabled={cancelMut.isPending}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50 transition-colors disabled:opacity-50"
+            >
+              <StopCircle className="h-4 w-4" />
+              {cancelMut.isPending ? 'Stopping…' : 'Stop'}
+            </button>
+          )}
+
+          {/* Delete — visible when not PROCESSING */}
+          {run.status !== 'PROCESSING' && (
+            confirmDelete ? (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-red-600">Delete?</span>
+                <button
+                  onClick={() => deleteMut.mutate()}
+                  disabled={deleteMut.isPending}
+                  className="px-2 py-1 rounded bg-red-600 text-white text-xs font-semibold hover:bg-red-700 disabled:opacity-50"
+                >
+                  {deleteMut.isPending ? '…' : 'Yes'}
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  className="px-2 py-1 rounded text-xs text-gray-500 hover:text-gray-700"
+                >
+                  No
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="p-2 rounded-lg border border-gray-200 text-gray-400 hover:text-red-600 hover:border-red-200 hover:bg-red-50 transition-colors"
+                title="Delete run"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )
+          )}
+
           {/* Download */}
           {run.status !== 'PROCESSING' && run.status !== 'FAILED' && (
-            <a
-              href={runsApi.downloadUrl(run.id)}
-              download
+            <button
+              onClick={async () => {
+                try {
+                  await runsApi.download(run.id);
+                  toast('Excel downloaded', undefined, 'success');
+                } catch (err) {
+                  toast('Download failed', getErrorMessage(err), 'error');
+                }
+              }}
               className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
             >
               <Download className="h-4 w-4" />
               Download
-            </a>
+            </button>
           )}
 
           {/* Reviewer actions */}
@@ -590,6 +922,11 @@ export default function RunDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Live progress panel — shown while PROCESSING */}
+      {run.status === 'PROCESSING' && (
+        <RunProgressPanel runId={id!} onComplete={() => refetch()} />
+      )}
 
       {/* Reject panel */}
       {showReject && canReview && (
@@ -727,7 +1064,11 @@ export default function RunDetailPage() {
           {[
             { value: 'matched', label: 'Matched Pairs', icon: <CheckCircle className="h-3.5 w-3.5" />, count: run.matched_count },
             { value: 'unmatched-26as', label: 'Unmatched 26AS', icon: <AlertTriangle className="h-3.5 w-3.5" />, count: run.unmatched_26as_count },
-            { value: 'unmatched-books', label: 'Unmatched Books', icon: <BookOpen className="h-3.5 w-3.5" /> },
+{ value: 'unmatched-books', label: 'Unmatched Books', icon: <BookOpen className="h-3.5 w-3.5" /> },
+            { value: 'suggested', label: 'Suggested Matches', icon: <Lightbulb className="h-3.5 w-3.5" /> },
+            { value: 'sections', label: 'Section Summary', icon: <PieChart className="h-3.5 w-3.5" /> },
+            { value: 'tracker', label: 'Resolution Tracker', icon: <ListChecks className="h-3.5 w-3.5" /> },
+            { value: 'methodology', label: 'Methodology', icon: <FileText className="h-3.5 w-3.5" /> },
             { value: 'exceptions', label: 'Exceptions', icon: <ClipboardList className="h-3.5 w-3.5" /> },
             { value: 'audit', label: 'Audit Trail', icon: <Activity className="h-3.5 w-3.5" /> },
           ].map((t) => (
@@ -765,8 +1106,20 @@ export default function RunDetailPage() {
         <TabsPrimitive.Content value="unmatched-26as">
           <Unmatched26ASTab runId={id!} />
         </TabsPrimitive.Content>
-        <TabsPrimitive.Content value="unmatched-books">
+<TabsPrimitive.Content value="unmatched-books">
           <UnmatchedBooksTab runId={id!} />
+        </TabsPrimitive.Content>
+        <TabsPrimitive.Content value="suggested">
+          <SuggestedMatchesTab runId={id!} />
+        </TabsPrimitive.Content>
+        <TabsPrimitive.Content value="sections">
+          <SectionSummaryTab runId={id!} />
+        </TabsPrimitive.Content>
+        <TabsPrimitive.Content value="tracker">
+          <MismatchTrackerTab runId={id!} />
+        </TabsPrimitive.Content>
+        <TabsPrimitive.Content value="methodology">
+          <MatchingMethodologyPanel runId={id!} />
         </TabsPrimitive.Content>
         <TabsPrimitive.Content value="exceptions">
           <ExceptionsTab runId={id!} canReview={canReview} />

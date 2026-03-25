@@ -200,6 +200,7 @@ def validate_26as(df: pd.DataFrame) -> Tuple[pd.DataFrame, ValidationReport]:
                             df.at[idx, "_flags"] = _add_flag(df.at[idx, "_flags"], "RATE_MISMATCH")
 
         # 4. Duplicate detection (same TAN + section + date + amount + TDS)
+        #    Duplicates are REJECTED (only first occurrence kept for matching)
         sig = _row_signature(row)
         if sig in seen_signatures:
             report.duplicates_found += 1
@@ -209,6 +210,7 @@ def validate_26as(df: pd.DataFrame) -> Tuple[pd.DataFrame, ValidationReport]:
                 field="amount"
             ))
             df.at[idx, "_flags"] = _add_flag(df.at[idx, "_flags"], "DUPLICATE_26AS")
+            df.at[idx, "_valid"] = False
         else:
             seen_signatures[sig] = idx
 

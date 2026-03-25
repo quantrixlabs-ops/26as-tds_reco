@@ -42,13 +42,27 @@ def test_same_date_max_score():
     assert score == 100.0
 
 
-def test_30_day_gap():
+def test_30_day_gap_book_before():
+    # Book is 30 days BEFORE 26AS → within-30 bucket → 100
+    score = _score_date_proximity("15-Jul-2023", ["15-Jun-2023"])
+    assert score == pytest.approx(100.0, abs=2)
+
+
+def test_30_day_gap_book_after_penalized():
+    # Book is 30 days AFTER 26AS (enforce_before=True) → heavy penalty
     score = _score_date_proximity("15-Jun-2023", ["15-Jul-2023"])
+    assert score == 5.0
+
+
+def test_30_day_gap_book_after_no_penalty():
+    # Book is 30 days AFTER 26AS but enforce_before=False → normal scoring
+    score = _score_date_proximity("15-Jun-2023", ["15-Jul-2023"], enforce_before=False)
     assert score == pytest.approx(100.0, abs=2)
 
 
 def test_180_day_gap():
-    score = _score_date_proximity("15-Jun-2023", ["15-Dec-2023"])
+    # Book is 183 days BEFORE 26AS
+    score = _score_date_proximity("15-Dec-2023", ["15-Jun-2023"])
     assert 0 <= score <= 25  # 183-day gap → score is 5 (far but valid)
 
 

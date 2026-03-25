@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, MappedColumn
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, text
 
 from core.settings import settings
 
@@ -25,7 +25,11 @@ class Base(DeclarativeBase):
 
 
 # Create async engine — works for both SQLite and PostgreSQL
-connect_args = {"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
+_is_sqlite = "sqlite" in settings.DATABASE_URL
+connect_args = {}
+if _is_sqlite:
+    connect_args["check_same_thread"] = False
+    connect_args["timeout"] = 30  # busy timeout (seconds) — prevents "database is locked"
 
 engine = create_async_engine(
     settings.DATABASE_URL,
@@ -57,4 +61,83 @@ async def get_db() -> AsyncSession:
 async def create_all_tables() -> None:
     """Create all tables on startup (dev only — use Alembic in prod)."""
     async with engine.begin() as conn:
+        # Enable WAL mode for SQLite (persistent — only needs to be set once per DB file)
+        if _is_sqlite:
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA busy_timeout=5000"))
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def auto_migrate() -> None:
+    """
+    Auto-add missing columns to existing tables by comparing SQLAlchemy models
+    against the live DB schema. Only handles ADD COLUMN (safe, non-destructive).
+    Runs on every startup — idempotent and fast.
+    """
+    import logging
+    logger = logging.getLogger("db.auto_migrate")
+
+    def _sql_type(col) -> str:
+        """Map SQLAlchemy type to SQLite/SQL column type string."""
+        from sqlalchemy import String, Float, Boolean, Integer, Text, DateTime, Date, JSON, LargeBinary, Enum
+        t = type(col.type)
+        if t in (String, Enum):
+            return "TEXT"
+        if t is Text:
+            return "TEXT"
+        if t is Float:
+            return "REAL"
+        if t in (Integer,):
+            return "INTEGER"
+        if t is Boolean:
+            return "BOOLEAN"
+        if t in (DateTime, Date):
+            return "TEXT"
+        if t is JSON:
+            return "TEXT"
+        if t is LargeBinary:
+            return "BLOB"
+        return "TEXT"
+
+    def _default_clause(col) -> str:
+        """Generate DEFAULT clause for the column if it has one."""
+        if col.default is not None:
+            val = col.default.arg
+            if callable(val):
+                return ""  # Can't express callables in DDL
+            if isinstance(val, bool):
+                return f" DEFAULT {1 if val else 0}"
+            if isinstance(val, (int, float)):
+                return f" DEFAULT {val}"
+            if isinstance(val, str):
+                return f" DEFAULT '{val}'"
+        if col.nullable:
+            return " DEFAULT NULL"
+        return ""
+
+    async with engine.begin() as conn:
+        for table_name, table in Base.metadata.tables.items():
+            # Get existing columns from live DB
+            if _is_sqlite:
+                result = await conn.execute(text(f"PRAGMA table_info('{table_name}')"))
+                existing_cols = {row[1] for row in result.fetchall()}
+            else:
+                # PostgreSQL
+                result = await conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    f"WHERE table_name = '{table_name}'"
+                ))
+                existing_cols = {row[0] for row in result.fetchall()}
+
+            if not existing_cols:
+                continue  # Table doesn't exist yet (create_all_tables will handle it)
+
+            # Compare model columns vs DB columns
+            for col in table.columns:
+                col_name = col.name if not hasattr(col, 'key') else col.name
+                if col_name not in existing_cols:
+                    sql_type = _sql_type(col)
+                    default = _default_clause(col)
+                    stmt = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {sql_type}{default}"
+                    await conn.execute(text(stmt))
+                    logger.info(f"auto_migrate: added {table_name}.{col_name} ({sql_type})")

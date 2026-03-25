@@ -9,11 +9,11 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Upload, FileSpreadsheet, X, CheckCircle, AlertCircle,
   ChevronDown, Layers, FileText, ChevronRight, ArrowLeft,
-  Check, AlertTriangle, HelpCircle,
+  Check, AlertTriangle, HelpCircle, Settings,
 } from 'lucide-react';
 import {
-  runsApi, miscApi,
-  type BatchMapping, type BatchParty,
+  runsApi, miscApi, settingsApi,
+  type BatchMapping, type BatchParty, type AdminSettings,
 } from '../lib/api';
 import { cn, getErrorMessage, formatFY } from '../lib/utils';
 import { Card } from '../components/ui/Card';
@@ -216,41 +216,87 @@ function MappingStatusBadge({ status, score }: { status: string; score: number |
 
 // ── Single mode ───────────────────────────────────────────────────────────────
 
+type SingleStep = 'upload' | 'mapping';
+
 function SingleUploadForm({ fyOptions }: { fyOptions: string[] }) {
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  // Step management
+  const [step, setStep] = useState<SingleStep>('upload');
+
+  // Upload state
   const [sapFile, setSapFile] = useState<File | null>(null);
   const [as26File, setAs26File] = useState<File | null>(null);
   const [financialYear, setFinancialYear] = useState(fyOptions[0] ?? '');
-  const [submitting, setSubmitting] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Mapping state (from preview)
+  const [mapping, setMapping] = useState<BatchMapping | null>(null);
+  const [allParties, setAllParties] = useState<BatchParty[]>([]);
+  const [noDeductors, setNoDeductors] = useState(false);
+  const [selectedParty, setSelectedParty] = useState<{ deductor_name: string; tan: string } | null>(null);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [partySearch, setPartySearch] = useState('');
+
+  // Run state
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (fyOptions.length && !financialYear) setFinancialYear(fyOptions[0]);
   }, [fyOptions, financialYear]);
 
-  const canSubmit = sapFile && as26File && financialYear && !submitting;
+  const canPreview = sapFile && as26File && financialYear && !previewing;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sapFile || !as26File || !financialYear) return;
+  // ── Preview: parse 26AS + fuzzy match ─────────────────────────────────────
+  const handlePreview = async () => {
+    if (!sapFile || !as26File) return;
+    setError(null);
+    setPreviewing(true);
+    try {
+      const result = await runsApi.batchPreview([sapFile], as26File);
+      const m = result.mappings[0] ?? null;
+      setMapping(m);
+      setAllParties(result.all_parties);
+      setNoDeductors(result.no_deductors === true || result.all_parties.length === 0);
+
+      // Auto-select if confirmed
+      if (m?.confirmed_name && m?.confirmed_tan) {
+        setSelectedParty({ deductor_name: m.confirmed_name, tan: m.confirmed_tan });
+      }
+      setStep('mapping');
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      setError(msg);
+      toast('Preview failed', msg, 'error');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  // ── Run reconciliation ────────────────────────────────────────────────────
+  const handleRun = async () => {
+    if (!sapFile || !as26File) return;
     setError(null);
     setSubmitting(true);
     try {
-      const result = await runsApi.create(sapFile, as26File, financialYear);
+      const parties = selectedParty ? [selectedParty] : null;
+      const result = await runsApi.create(sapFile, as26File, financialYear, parties);
       toast('Run submitted', `Run #${result.run_number} is processing`, 'success');
       navigate(`/runs/${result.run_id}`);
     } catch (err) {
       const msg = getErrorMessage(err);
       setError(msg);
-      toast('Submission failed', msg, 'error');
+      toast('Run failed', msg, 'error');
     } finally {
       setSubmitting(false);
     }
   };
 
-  return (
-    <form onSubmit={handleSubmit}>
+  // ── Step 1: Upload ────────────────────────────────────────────────────────
+  if (step === 'upload') {
+    return (
       <Card className="space-y-6">
         {error && (
           <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
@@ -286,40 +332,445 @@ function SingleUploadForm({ fyOptions }: { fyOptions: string[] }) {
 
         <div className="flex items-center gap-3 pt-2">
           <button
-            type="submit"
-            disabled={!canSubmit}
+            type="button"
+            disabled={!canPreview}
+            onClick={handlePreview}
             className={cn(
               'flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors',
-              canSubmit ? 'bg-[#1B3A5C] text-white hover:bg-[#15304d]' : 'bg-gray-100 text-gray-400 cursor-not-allowed',
+              canPreview ? 'bg-[#1B3A5C] text-white hover:bg-[#15304d]' : 'bg-gray-100 text-gray-400 cursor-not-allowed',
             )}
           >
-            {submitting && <Spinner size="sm" className="border-white/30 border-t-white" />}
-            {submitting ? 'Submitting…' : 'Start Reconciliation'}
+            {previewing && <Spinner size="sm" className="border-white/30 border-t-white" />}
+            {previewing ? 'Analysing…' : 'Continue'} <ChevronRight className="h-4 w-4" />
           </button>
           <button type="button" onClick={() => navigate(-1)} className="px-4 py-2.5 text-sm text-gray-600 hover:text-gray-900 font-medium">
             Cancel
           </button>
         </div>
       </Card>
+    );
+  }
 
-      {submitting && (
-        <Card className="flex items-center gap-4 mt-4">
-          <Spinner size="lg" />
-          <div>
-            <p className="text-sm font-semibold text-gray-900">Processing reconciliation…</p>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Cleaning SAP data, parsing 26AS, running 5-phase match algorithm. This may take 30–90 seconds.
-            </p>
-          </div>
-        </Card>
+  // ── Step 2: Mapping ───────────────────────────────────────────────────────
+  const filteredParties = allParties.filter((p) => {
+    if (!partySearch) return true;
+    const q = partySearch.toLowerCase();
+    return p.deductor_name.toLowerCase().includes(q) || p.tan.toLowerCase().includes(q);
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => { setStep('upload'); setMapping(null); setSelectedParty(null); setNoDeductors(false); }}
+          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 font-medium"
+        >
+          <ArrowLeft className="h-4 w-4" /> Back to Upload
+        </button>
+        <span className="text-xs text-gray-400">Step 2 of 2</span>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
       )}
-    </form>
+
+      <Card className="space-y-5">
+        <div className="flex items-center gap-2 pb-3 border-b border-gray-100">
+          <FileSpreadsheet className="h-4 w-4 text-[#1B3A5C]" />
+          <h3 className="text-sm font-semibold text-gray-900">Party Mapping</h3>
+        </div>
+
+        {/* SAP file identity */}
+        <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+          <FileText className="h-5 w-5 text-gray-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-900 truncate">{sapFile?.name}</p>
+            {mapping && <p className="text-xs text-gray-500">Identity: {mapping.identity_string}</p>}
+          </div>
+          <ChevronRight className="h-4 w-4 text-gray-300" />
+          {/* Status badge */}
+          {noDeductors ? (
+            <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+              <HelpCircle className="h-3 w-3" /> All Data
+            </span>
+          ) : mapping?.status === 'AUTO_CONFIRMED' ? (
+            <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <Check className="h-3 w-3" /> Auto ({Math.round(mapping.fuzzy_score ?? 0)}%)
+            </span>
+          ) : mapping?.status === 'PENDING' ? (
+            <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+              <AlertTriangle className="h-3 w-3" /> Review
+            </span>
+          ) : (
+            <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200">
+              <AlertCircle className="h-3 w-3" /> No Match
+            </span>
+          )}
+        </div>
+
+        {/* No deductors info */}
+        {noDeductors && (
+          <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-xs text-blue-700 leading-relaxed">
+            <strong>No deductor information found in 26AS.</strong> All entries in the 26AS file will be matched against your SAP file.
+          </div>
+        )}
+
+        {/* Selected party chip + change option (when deductors exist) */}
+        {!noDeductors && selectedParty && (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Selected Deductor</p>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-sm">
+                <span className="font-medium text-emerald-800 truncate max-w-[240px]">{selectedParty.deductor_name}</span>
+                <span className="text-xs text-emerald-600 font-mono">{selectedParty.tan}</span>
+                <button type="button" onClick={() => { setSelectedParty(null); setShowDropdown(true); }}
+                  className="p-0.5 hover:bg-emerald-100 rounded-full text-emerald-600">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            </div>
+            <button type="button" onClick={() => setShowDropdown(!showDropdown)}
+              className="text-xs text-[#1B3A5C] hover:underline font-medium">
+              {showDropdown ? 'Hide list' : 'Change selection'}
+            </button>
+          </div>
+        )}
+
+        {/* Party selection dropdown (shown when no auto-match, or user wants to change) */}
+        {!noDeductors && (!selectedParty || showDropdown) && allParties.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              {selectedParty ? 'Change Deductor' : 'Select Deductor from 26AS'}
+            </p>
+            <div className="relative">
+              <input
+                type="text"
+                value={partySearch}
+                onChange={(e) => setPartySearch(e.target.value)}
+                placeholder="Search by name or TAN…"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#1B3A5C] focus:ring-2 focus:ring-[#1B3A5C]/10"
+              />
+            </div>
+            <div className="border border-gray-200 rounded-lg max-h-52 overflow-y-auto divide-y divide-gray-100">
+              {filteredParties.map((p) => {
+                const isSelected = selectedParty?.tan === p.tan && selectedParty?.deductor_name === p.deductor_name;
+                return (
+                  <button
+                    key={p.tan + p.deductor_name}
+                    type="button"
+                    onClick={() => {
+                      setSelectedParty({ deductor_name: p.deductor_name, tan: p.tan });
+                      setShowDropdown(false);
+                      setPartySearch('');
+                    }}
+                    className={cn(
+                      'w-full flex items-center justify-between px-3 py-2 text-left text-sm hover:bg-gray-50 transition-colors',
+                      isSelected && 'bg-emerald-50',
+                    )}
+                  >
+                    <div className="min-w-0">
+                      <span className="font-medium text-gray-900 truncate block">{p.deductor_name}</span>
+                      <span className="text-xs text-gray-500 font-mono">{p.tan}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 ml-3">
+                      <span className="text-xs text-gray-400">{p.entry_count} entries</span>
+                      {isSelected && <Check className="h-4 w-4 text-emerald-600" />}
+                    </div>
+                  </button>
+                );
+              })}
+              {filteredParties.length === 0 && (
+                <p className="text-xs text-gray-400 px-3 py-4 text-center">No parties match your search</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-3 pt-3 border-t border-gray-100">
+          <button
+            type="button"
+            disabled={!noDeductors && !selectedParty || submitting}
+            onClick={handleRun}
+            className={cn(
+              'flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors',
+              (noDeductors || selectedParty) && !submitting
+                ? 'bg-[#1B3A5C] text-white hover:bg-[#15304d]'
+                : 'bg-gray-100 text-gray-400 cursor-not-allowed',
+            )}
+          >
+            {submitting && <Spinner size="sm" className="border-white/30 border-t-white" />}
+            {submitting ? 'Starting…' : 'Start Reconciliation'}
+          </button>
+        </div>
+      </Card>
+    </div>
   );
 }
 
 // ── Batch mode ────────────────────────────────────────────────────────────────
 
-type BatchStep = 'upload' | 'review';
+type BatchStep = 'upload' | 'config' | 'review';
+
+// ── Batch Config Step ─────────────────────────────────────────────────────────
+
+function BatchConfigStep({
+  onContinue,
+  onBack,
+}: {
+  onContinue: (cfg: Partial<AdminSettings> | null) => void;
+  onBack: () => void;
+}) {
+  const [useDefaults, setUseDefaults] = useState(true);
+  const { data: adminSettings, isLoading } = useQuery({
+    queryKey: ['admin-settings'],
+    queryFn: settingsApi.get,
+  });
+
+  const [draft, setDraft] = useState<Partial<AdminSettings>>({});
+
+  // Sync from admin when loaded
+  useEffect(() => {
+    if (adminSettings && Object.keys(draft).length === 0) {
+      setDraft({
+        doc_types_include: adminSettings.doc_types_include,
+        doc_types_exclude: adminSettings.doc_types_exclude,
+        date_hard_cutoff_days: adminSettings.date_hard_cutoff_days,
+        date_soft_preference_days: adminSettings.date_soft_preference_days,
+        enforce_books_before_26as: adminSettings.enforce_books_before_26as,
+        variance_normal_ceiling_pct: adminSettings.variance_normal_ceiling_pct,
+        variance_suggested_ceiling_pct: adminSettings.variance_suggested_ceiling_pct,
+        exclude_sgl_v: adminSettings.exclude_sgl_v,
+        max_combo_size: adminSettings.max_combo_size,
+        date_clustering_preference: adminSettings.date_clustering_preference,
+        allow_cross_fy: adminSettings.allow_cross_fy,
+        cross_fy_lookback_years: adminSettings.cross_fy_lookback_years,
+        force_match_enabled: adminSettings.force_match_enabled,
+        noise_threshold: adminSettings.noise_threshold,
+      });
+    }
+  }, [adminSettings, draft]);
+
+  const setField = <K extends keyof AdminSettings>(key: K, value: AdminSettings[K]) => {
+    setDraft((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const toggleDoc = (field: 'doc_types_include' | 'doc_types_exclude', val: string) => {
+    const cur = (draft[field] ?? []) as string[];
+    setDraft((prev) => ({
+      ...prev,
+      [field]: cur.includes(val) ? cur.filter((v) => v !== val) : [...cur, val],
+    }));
+  };
+
+  if (isLoading) {
+    return (
+      <Card className="flex items-center justify-center py-12">
+        <Spinner size="lg" />
+        <p className="text-sm text-gray-400 ml-3">Loading admin settings...</p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <button type="button" onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 font-medium">
+          <ArrowLeft className="h-4 w-4" /> Back to Upload
+        </button>
+        <span className="text-xs text-gray-400">Step 2 of 3</span>
+      </div>
+
+      <Card className="space-y-5">
+        <div className="flex items-center gap-2 pb-3 border-b border-gray-100">
+          <Settings className="h-4 w-4 text-[#1B3A5C]" />
+          <h3 className="text-sm font-semibold text-gray-900">Run Configuration</h3>
+        </div>
+
+        {/* Use defaults toggle */}
+        <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg bg-gray-50 border border-gray-100">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={useDefaults}
+            onClick={() => setUseDefaults(!useDefaults)}
+            className={cn('relative w-10 h-5 rounded-full transition-colors', useDefaults ? 'bg-[#1B3A5C]' : 'bg-gray-300')}
+          >
+            <span className={cn('absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform', useDefaults && 'translate-x-5')} />
+          </button>
+          <div>
+            <span className="text-sm font-medium text-gray-800">Use Admin Defaults</span>
+            {adminSettings?.updated_at && (
+              <p className="text-xs text-gray-400 mt-0.5">Last updated: {new Date(adminSettings.updated_at).toLocaleDateString()}</p>
+            )}
+          </div>
+        </label>
+
+        {!useDefaults && (
+          <div className="space-y-4">
+            {/* Document types */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Document Filters</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Include doc types</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {['RV', 'DR', 'DC'].map((dt) => {
+                      const active = (draft.doc_types_include ?? []).includes(dt);
+                      return (
+                        <button key={dt} type="button" onClick={() => toggleDoc('doc_types_include', dt)}
+                          className={cn('px-2.5 py-1 rounded text-xs font-mono font-semibold border transition-colors',
+                            active ? 'bg-[#1B3A5C] text-white border-[#1B3A5C]' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400')}>
+                          {dt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Exclude doc types</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {['CC', 'BR'].map((dt) => {
+                      const active = (draft.doc_types_exclude ?? []).includes(dt);
+                      return (
+                        <button key={dt} type="button" onClick={() => toggleDoc('doc_types_exclude', dt)}
+                          className={cn('px-2.5 py-1 rounded text-xs font-mono font-semibold border transition-colors',
+                            active ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400')}>
+                          {dt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Date rules */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Date Rules</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Hard cutoff (days)</label>
+                  <input type="number" value={draft.date_hard_cutoff_days ?? 90}
+                    onChange={(e) => setField('date_hard_cutoff_days', parseInt(e.target.value) || 90)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#1B3A5C]" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Soft preference (days)</label>
+                  <input type="number" value={draft.date_soft_preference_days ?? 180}
+                    onChange={(e) => setField('date_soft_preference_days', parseInt(e.target.value) || 180)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#1B3A5C]" />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                <input type="checkbox" checked={draft.enforce_books_before_26as ?? true}
+                  onChange={(e) => setField('enforce_books_before_26as', e.target.checked)}
+                  className="rounded border-gray-300" />
+                <span className="text-xs text-gray-600">Books date must be on or before 26AS date</span>
+              </label>
+            </div>
+
+            {/* Variance */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Variance Thresholds</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Normal ceiling (%)</label>
+                  <input type="number" step="0.5" value={draft.variance_normal_ceiling_pct ?? 3.0}
+                    onChange={(e) => setField('variance_normal_ceiling_pct', parseFloat(e.target.value) || 3.0)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#1B3A5C]" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Suggested ceiling (%)</label>
+                  <input type="number" step="0.5" value={draft.variance_suggested_ceiling_pct ?? 20.0}
+                    onChange={(e) => setField('variance_suggested_ceiling_pct', parseFloat(e.target.value) || 20.0)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#1B3A5C]" />
+                </div>
+              </div>
+            </div>
+
+            {/* Matching behavior */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Matching Behavior</p>
+              <div className="grid grid-cols-2 gap-3 mb-2">
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Max combo size (0=unlimited)</label>
+                  <input type="number" value={draft.max_combo_size ?? 0}
+                    onChange={(e) => setField('max_combo_size', parseInt(e.target.value) || 0)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#1B3A5C]" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Noise threshold (Rs.)</label>
+                  <input type="number" step="0.1" value={draft.noise_threshold ?? 1.0}
+                    onChange={(e) => setField('noise_threshold', parseFloat(e.target.value) || 1.0)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#1B3A5C]" />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={draft.force_match_enabled ?? true}
+                    onChange={(e) => setField('force_match_enabled', e.target.checked)} className="rounded border-gray-300" />
+                  <span className="text-xs text-gray-600">Enable force matching</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={draft.date_clustering_preference ?? true}
+                    onChange={(e) => setField('date_clustering_preference', e.target.checked)} className="rounded border-gray-300" />
+                  <span className="text-xs text-gray-600">Prefer date-clustered combos</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Advances and Cross-FY */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Advances & Cross-FY</p>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={draft.exclude_sgl_v ?? true}
+                    onChange={(e) => setField('exclude_sgl_v', e.target.checked)} className="rounded border-gray-300" />
+                  <span className="text-xs text-gray-600">Exclude advance payments (SGL_V)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={draft.allow_cross_fy ?? false}
+                    onChange={(e) => setField('allow_cross_fy', e.target.checked)} className="rounded border-gray-300" />
+                  <span className="text-xs text-gray-600">Allow cross-FY matching</span>
+                </label>
+                {(draft.allow_cross_fy) && (
+                  <div className="ml-6">
+                    <label className="block text-xs text-gray-600 mb-1">Lookback years</label>
+                    <input type="number" value={draft.cross_fy_lookback_years ?? 1} min={1} max={3}
+                      onChange={(e) => setField('cross_fy_lookback_years', parseInt(e.target.value) || 1)}
+                      className="w-20 border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#1B3A5C]" />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {useDefaults && adminSettings && (
+          <div className="text-xs text-gray-400 space-y-1">
+            <p>Doc types: {adminSettings.doc_types_include.join(', ')} | Variance: 0-{adminSettings.variance_normal_ceiling_pct}% normal, up to {adminSettings.variance_suggested_ceiling_pct}% suggested</p>
+            <p>Date: {adminSettings.date_hard_cutoff_days}d hard cutoff, {adminSettings.date_soft_preference_days}d soft | Cross-FY: {adminSettings.allow_cross_fy ? 'Yes' : 'No'} | Advances: {adminSettings.exclude_sgl_v ? 'Excluded' : 'Included'}</p>
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 pt-3 border-t border-gray-100">
+          <button
+            type="button"
+            onClick={() => onContinue(useDefaults ? null : draft)}
+            className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold bg-[#1B3A5C] text-white hover:bg-[#15304d] transition-colors"
+          >
+            Continue to Name Mapping <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      </Card>
+    </div>
+  );
+}
 
 function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
   const navigate = useNavigate();
@@ -330,11 +781,15 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
   const [as26File, setAs26File] = useState<File | null>(null);
   const [financialYear, setFinancialYear] = useState(fyOptions[0] ?? '');
 
+  // Config step state
+  const [batchConfig, setBatchConfig] = useState<Partial<AdminSettings> | null>(null);
+
   // Preview step state
   const [mappings, setMappings] = useState<BatchMapping[]>([]);
   const [allParties, setAllParties] = useState<BatchParty[]>([]);
   const [overrides, setOverrides] = useState<Record<string, Array<{ deductor_name: string; tan: string }>>>({});
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const [expandedChips, setExpandedChips] = useState<string | null>(null);
   const [dropdownSearch, setDropdownSearch] = useState('');
 
   const [previewing, setPreviewing] = useState(false);
@@ -363,7 +818,7 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
         }
       }
       setOverrides(seed);
-      setStep('review');
+      setStep('config');
     } catch (err) {
       const msg = getErrorMessage(err);
       setError(msg);
@@ -414,7 +869,7 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
     try {
       // Only pass files that have at least one party selected
       const activeFiles = sapFiles.filter((f) => (overrides[f.name] ?? []).length > 0);
-      const result = await runsApi.batchRun(activeFiles, as26File, financialYear, overrides);
+      const result = await runsApi.batchRun(activeFiles, as26File, financialYear, overrides, batchConfig);
       const failed = result.runs.filter((r) => r.status === 'FAILED').length;
       if (failed > 0) {
         toast(
@@ -491,17 +946,30 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
     );
   }
 
-  // ── Step 2: Review mappings ─────────────────────────────────────────────────
+  // ── Step 2: Batch Config ──────────────────────────────────────────────────
+  if (step === 'config') {
+    return (
+      <BatchConfigStep
+        onBack={() => setStep('upload')}
+        onContinue={(cfg) => {
+          setBatchConfig(cfg);
+          setStep('review');
+        }}
+      />
+    );
+  }
+
+  // ── Step 3: Review mappings ─────────────────────────────────────────────────
   return (
     <div className="space-y-4">
       {/* Header bar */}
       <div className="flex items-center justify-between">
         <button
           type="button"
-          onClick={() => setStep('upload')}
+          onClick={() => setStep('config')}
           className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 font-medium"
         >
-          <ArrowLeft className="h-4 w-4" /> Back
+          <ArrowLeft className="h-4 w-4" /> Back to Config
         </button>
         <div className="flex items-center gap-3 text-xs text-gray-500">
           <span className="text-emerald-600 font-semibold">{resolvedCount} ready</span>
@@ -524,7 +992,7 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
           </p>
         </div>
 
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-100 max-h-[60vh] overflow-y-auto">
           {mappings.map((m) => {
             const selectedParties = overrides[m.sap_filename] ?? [];
 
@@ -557,10 +1025,10 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
                     )}
                   </div>
 
-                  {/* Chips for selected parties */}
+                  {/* Chips for selected parties — max 2 visible, rest collapsed */}
                   {selectedParties.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {selectedParties.map((p) => (
+                    <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                      {selectedParties.slice(0, 2).map((p) => (
                         <span
                           key={p.tan}
                           className="inline-flex items-center gap-1 bg-[#1B3A5C]/8 text-[#1B3A5C] text-xs font-medium px-2 py-1 rounded-lg border border-[#1B3A5C]/20"
@@ -576,6 +1044,37 @@ function BatchUploadForm({ fyOptions }: { fyOptions: string[] }) {
                           </button>
                         </span>
                       ))}
+                      {selectedParties.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => setExpandedChips((prev) => prev === m.sap_filename ? null : m.sap_filename)}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1B3A5C] bg-[#1B3A5C]/5 px-2 py-1 rounded-lg hover:bg-[#1B3A5C]/10 transition-colors"
+                        >
+                          +{selectedParties.length - 2} more
+                          <ChevronDown className={`h-3 w-3 transition-transform ${expandedChips === m.sap_filename ? 'rotate-180' : ''}`} />
+                        </button>
+                      )}
+                      {/* Expanded overflow chips */}
+                      {expandedChips === m.sap_filename && selectedParties.length > 2 && (
+                        <div className="w-full flex flex-wrap gap-1.5 mt-1 pt-1.5 border-t border-gray-100">
+                          {selectedParties.slice(2).map((p) => (
+                            <span
+                              key={p.tan}
+                              className="inline-flex items-center gap-1 bg-[#1B3A5C]/8 text-[#1B3A5C] text-xs font-medium px-2 py-1 rounded-lg border border-[#1B3A5C]/20"
+                            >
+                              <span className="truncate max-w-[140px]">{p.deductor_name}</span>
+                              <span className="text-[10px] text-gray-400 shrink-0">{p.tan}</span>
+                              <button
+                                type="button"
+                                onClick={() => removePartyChip(m.sap_filename, p.tan)}
+                                className="ml-0.5 text-gray-400 hover:text-red-500 transition-colors"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
 

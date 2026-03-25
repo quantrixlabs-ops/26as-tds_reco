@@ -105,6 +105,14 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/runs/batch"
+        element={
+          <PrivateRoute>
+            <RunHistoryPage defaultMode="BATCH" />
+          </PrivateRoute>
+        }
+      />
+      <Route
         path="/runs/new"
         element={
           <PrivateRoute>

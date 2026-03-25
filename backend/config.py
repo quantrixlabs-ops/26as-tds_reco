@@ -12,6 +12,7 @@ from typing import Tuple
 MAX_COMBO_SIZE: int = 5          # Hard cap: enforced in ALL phases (COMBO, FORCE_COMBO, CLR_GROUP)
                                  # Brief §3: MAX_COMBO_SIZE = 5. Groups > 5 are skipped/logged.
 COMBO_LIMIT: int = 500           # Max combinations tried PER SIZE in Phase B (not shared global)
+COMBO_ITERATION_BUDGET: int = 50_000  # Max iterations per (26AS entry × size) — prevents runaway loops
 EXACT_TOLERANCE: float = 0.01   # ₹ difference threshold for EXACT classification
 
 # ── Tier-specific variance ceilings (Brief §3/#4, March 2026) ─────────────────
@@ -99,3 +100,53 @@ def date_to_fy_label(d: date) -> str:
         return f"FY{d.year}-{str(d.year + 1)[2:]}"
     else:
         return f"FY{d.year - 1}-{str(d.year)[2:]}"
+
+
+# ── Runtime configuration dataclass ──────────────────────────────────────────
+
+from dataclasses import dataclass, field as dc_field
+
+
+@dataclass
+class MatchConfig:
+    """Runtime configuration for a single reconciliation run.
+    Populated from AdminSettings (DB) + per-run overrides (batch config).
+    """
+    # Document Filters
+    doc_types_include: list = dc_field(default_factory=lambda: ["RV", "DR"])
+    doc_types_exclude: list = dc_field(default_factory=lambda: ["CC", "BR"])
+
+    # Date Rules
+    date_hard_cutoff_days: int = 90
+    date_soft_preference_days: int = 180
+    enforce_books_before_26as: bool = True
+
+    # Variance Thresholds
+    variance_normal_ceiling_pct: float = 3.0
+    variance_suggested_ceiling_pct: float = 20.0
+
+    # Advance Payment
+    exclude_sgl_v: bool = True
+
+    # Combo Settings
+    max_combo_size: int = 0  # 0 = unlimited
+    date_clustering_preference: bool = True
+
+    # Cross-FY
+    allow_cross_fy: bool = False
+    cross_fy_lookback_years: int = 1
+
+    # Force Match
+    force_match_enabled: bool = True
+
+    # Noise
+    noise_threshold: float = 1.0
+
+    # Internals (not user-configurable)
+    exact_tolerance: float = 0.01
+    combo_pool_cap: int = 50
+    combo_iteration_budget: int = 50_000
+
+    def to_dict(self) -> dict:
+        from dataclasses import asdict
+        return asdict(self)

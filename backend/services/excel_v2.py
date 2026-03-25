@@ -58,6 +58,18 @@ def generate_excel_v2(
     unmatched_books: List[UnmatchedBook],
     exceptions: List[ExceptionRecord],
 ) -> bytes:
+    # Deduplicate matched pairs by as26_row_hash (safety net)
+    seen_hashes: set = set()
+    deduped_pairs: List[MatchedPair] = []
+    for mp in matched_pairs:
+        h = mp.as26_row_hash
+        if h and h in seen_hashes:
+            continue
+        if h:
+            seen_hashes.add(h)
+        deduped_pairs.append(mp)
+    matched_pairs = deduped_pairs
+
     wb = Workbook()
 
     _build_summary(wb.active, run, matched_pairs, unmatched_26as, exceptions)
@@ -330,6 +342,141 @@ def _build_unmatched_books(ws, entries: List[UnmatchedBook]):
     widths = [5, 25, 16, 14, 12, 16, 30]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
+
+
+def generate_batch_excel(
+    runs_data: List[dict],
+) -> bytes:
+    """Generate a combined Excel workbook for a batch of runs.
+
+    Args:
+        runs_data: list of dicts, each with keys:
+            run, matched_pairs, unmatched_26as, unmatched_books, exceptions
+    Returns:
+        Excel file bytes.
+    """
+    wb = Workbook()
+
+    # ── Batch Summary sheet ─────────────────────────────────────────────────
+    ws_summary = wb.active
+    ws_summary.title = "Batch Summary"
+    ws_summary.sheet_view.showGridLines = False
+    ws_summary.freeze_panes = "A3"
+
+    first_run = runs_data[0]["run"] if runs_data else None
+    fy_label = first_run.financial_year if first_run else "—"
+    ws_summary.merge_cells("A1:L1")
+    ws_summary["A1"] = f"TDS BATCH RECONCILIATION SUMMARY — {fy_label}"
+    ws_summary["A1"].font = Font(bold=True, color=WHITE, size=14, name="Calibri")
+    ws_summary["A1"].fill = _fill(NAVY)
+    ws_summary["A1"].alignment = _align("center")
+    ws_summary.row_dimensions[1].height = 30
+
+    summary_headers = [
+        "#", "Deductor", "TAN", "Status", "Match Rate",
+        "Matched", "Unmatched 26AS", "Total 26AS",
+        "Violations", "HIGH", "MEDIUM", "LOW",
+    ]
+    for c, h in enumerate(summary_headers, 1):
+        cell = ws_summary.cell(2, c, h)
+        cell.font = Font(bold=True, color=WHITE, size=9, name="Calibri")
+        cell.fill = _fill(NAVY)
+        cell.alignment = _align("center")
+
+    total_matched_all = 0
+    total_26as_all = 0
+
+    for idx, rd in enumerate(runs_data, 3):
+        run: ReconciliationRun = rd["run"]
+        total_matched_all += run.matched_count or 0
+        total_26as_all += run.total_26as_entries or 0
+
+        rate_color = VAR_GREEN if run.match_rate_pct >= 95 else VAR_YELLOW if run.match_rate_pct >= 75 else VAR_RED
+
+        ws_summary.cell(idx, 1, idx - 2).alignment = _align("center")
+        ws_summary.cell(idx, 2, run.deductor_name or "—")
+        ws_summary.cell(idx, 3, run.tan or "—").alignment = _align("center")
+        ws_summary.cell(idx, 4, run.status)
+        rate_cell = ws_summary.cell(idx, 5, f"{run.match_rate_pct:.2f}%")
+        rate_cell.fill = _fill(rate_color)
+        rate_cell.alignment = _align("center")
+        ws_summary.cell(idx, 6, run.matched_count or 0).alignment = _align("center")
+        ws_summary.cell(idx, 7, run.unmatched_26as_count or 0).alignment = _align("center")
+        ws_summary.cell(idx, 8, run.total_26as_entries or 0).alignment = _align("center")
+        viol_cell = ws_summary.cell(idx, 9, run.constraint_violations or 0)
+        viol_cell.alignment = _align("center")
+        if (run.constraint_violations or 0) > 0:
+            viol_cell.fill = _fill(VAR_RED)
+        ws_summary.cell(idx, 10, run.high_confidence_count or 0).alignment = _align("center")
+        ws_summary.cell(idx, 10).fill = _fill(CONF_HIGH)
+        ws_summary.cell(idx, 11, run.medium_confidence_count or 0).alignment = _align("center")
+        ws_summary.cell(idx, 11).fill = _fill(CONF_MED)
+        ws_summary.cell(idx, 12, run.low_confidence_count or 0).alignment = _align("center")
+        ws_summary.cell(idx, 12).fill = _fill(CONF_LOW)
+
+    # Totals row
+    totals_row = len(runs_data) + 3
+    ws_summary.cell(totals_row, 1, "").font = Font(bold=True, size=9, name="Calibri")
+    ws_summary.cell(totals_row, 2, "TOTAL").font = Font(bold=True, size=10, name="Calibri")
+    overall_rate = (total_matched_all / total_26as_all * 100) if total_26as_all > 0 else 0
+    rate_color = VAR_GREEN if overall_rate >= 95 else VAR_YELLOW if overall_rate >= 75 else VAR_RED
+    rate_cell = ws_summary.cell(totals_row, 5, f"{overall_rate:.2f}%")
+    rate_cell.font = Font(bold=True, size=10, name="Calibri")
+    rate_cell.fill = _fill(rate_color)
+    rate_cell.alignment = _align("center")
+    ws_summary.cell(totals_row, 6, total_matched_all).font = Font(bold=True, size=10, name="Calibri")
+    ws_summary.cell(totals_row, 6).alignment = _align("center")
+    total_unmatched = sum((rd["run"].unmatched_26as_count or 0) for rd in runs_data)
+    ws_summary.cell(totals_row, 7, total_unmatched).font = Font(bold=True, size=10, name="Calibri")
+    ws_summary.cell(totals_row, 7).alignment = _align("center")
+    ws_summary.cell(totals_row, 8, total_26as_all).font = Font(bold=True, size=10, name="Calibri")
+    ws_summary.cell(totals_row, 8).alignment = _align("center")
+    total_violations = sum((rd["run"].constraint_violations or 0) for rd in runs_data)
+    ws_summary.cell(totals_row, 9, total_violations).font = Font(bold=True, size=10, name="Calibri")
+    ws_summary.cell(totals_row, 9).alignment = _align("center")
+
+    # Timestamp
+    ts_row = totals_row + 2
+    ws_summary.merge_cells(f"A{ts_row}:L{ts_row}")
+    ws_summary.cell(ts_row, 1,
+                    f"Generated: {datetime.now(timezone.utc).strftime('%d-%b-%Y %H:%M UTC')} | "
+                    f"Parties: {len(runs_data)} | Algorithm: {first_run.algorithm_version if first_run else '—'}"
+                    ).font = Font(italic=True, size=8, color="888888", name="Calibri")
+
+    summary_widths = [5, 35, 14, 16, 12, 10, 14, 10, 10, 8, 10, 8]
+    for i, w in enumerate(summary_widths, 1):
+        ws_summary.column_dimensions[get_column_letter(i)].width = w
+
+    # ── Per-party matched-pairs sheets ──────────────────────────────────────
+    for rd in runs_data:
+        run: ReconciliationRun = rd["run"]
+        # Deduplicate matched pairs by as26_row_hash (safety net against duplicate promotions)
+        raw_pairs: List[MatchedPair] = rd["matched_pairs"]
+        seen_hashes: set = set()
+        matched_pairs: List[MatchedPair] = []
+        for mp in raw_pairs:
+            h = mp.as26_row_hash
+            if h and h in seen_hashes:
+                continue
+            if h:
+                seen_hashes.add(h)
+            matched_pairs.append(mp)
+
+        # Excel sheet names max 31 chars, must be unique
+        sheet_name = (run.deductor_name or run.tan or f"Run-{run.run_number}")[:31]
+        # Ensure uniqueness
+        existing = [ws.title for ws in wb.worksheets]
+        if sheet_name in existing:
+            suffix = f" ({run.run_number})"
+            sheet_name = sheet_name[:31 - len(suffix)] + suffix
+
+        ws = wb.create_sheet(sheet_name)
+        _build_matched(ws, matched_pairs, run)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
 
 
 def _build_variance(ws, pairs: List[MatchedPair]):

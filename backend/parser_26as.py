@@ -76,18 +76,29 @@ def _parse_date(val: Any) -> Optional[str]:
     return None  # Reject unparseable dates instead of returning garbage strings
 
 
-def _detect_header_row(ws) -> int:
+def _detect_header_row(ws, lenient: bool = False) -> int:
     """
     Return the 1-based row number that contains the 26AS column headers.
-    Looks for 'Name of Deductor' in column B (index 1) within first 5 rows.
+    Looks for 'Name of Deductor' (or 'Amount Paid' in lenient mode) within first 5 rows.
     Falls back to row 3 (spec default) then row 1.
     """
+    def _row_vals(row_num: int):
+        try:
+            return [c.value for c in next(ws.iter_rows(min_row=row_num, max_row=row_num))]
+        except StopIteration:
+            return []
+
+    # Primary: look for deductor name header
     for row_num in range(1, 6):
-        row_vals = [c.value for c in next(ws.iter_rows(min_row=row_num, max_row=row_num))]
-        # Check if any cell contains header-like text
-        for val in row_vals:
+        for val in _row_vals(row_num):
             if val and _NAME_ALIASES.search(str(val)):
                 return row_num
+    # Lenient fallback: look for amount or status header (files without deductor info)
+    if lenient:
+        for row_num in range(1, 6):
+            for val in _row_vals(row_num):
+                if val and (_AMOUNT_ALIASES.search(str(val)) or _STATUS_ALIASES.search(str(val))):
+                    return row_num
     # Spec default
     return 3
 
@@ -110,6 +121,7 @@ def parse_26as(
     file_bytes: bytes,
     fy_start: Optional[date] = None,
     fy_end: Optional[date] = None,
+    lenient: bool = False,
 ) -> pd.DataFrame:
     """
     Parse a 26AS Excel file and return a DataFrame with Status=F rows only.
@@ -119,6 +131,9 @@ def parse_26as(
     file_bytes : Raw .xlsx bytes
     fy_start   : If provided, exclude rows where transaction_date < fy_start
     fy_end     : If provided, exclude rows where transaction_date > fy_end
+    lenient    : If True, deductor_name and tan are optional (filled with
+                 "UNKNOWN" / "UNKNOWN_TAN"). Useful for single-party 26AS
+                 files that don't have deductor info columns.
 
     Columns returned:
         deductor_name, tan, section, transaction_date, amount,
@@ -136,7 +151,7 @@ def parse_26as(
         data_sheet = wb.active
 
     # ── Detect header row ──────────────────────────────────────────────────
-    header_row_num = _detect_header_row(data_sheet)
+    header_row_num = _detect_header_row(data_sheet, lenient=lenient)
     data_start_row = header_row_num + 1
 
     # ── Read header row and build column mapping ───────────────────────────
@@ -154,7 +169,7 @@ def parse_26as(
             col_map[idx] = canonical
             used_canonicals.add(canonical)
 
-    required = {"deductor_name", "tan", "amount", "status"}
+    required = {"amount", "status"} if lenient else {"deductor_name", "tan", "amount", "status"}
     found = set(col_map.values())
     if not required.issubset(found):
         missing = required - found

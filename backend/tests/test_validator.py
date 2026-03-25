@@ -103,9 +103,11 @@ def test_duplicate_26as_detected():
         "amount": 100000.0, "tds_amount": 1000.0, "status": "F",
     }
     df = pd.DataFrame([row, row])  # exact duplicate
-    _, report = validate_26as(df)
+    validated_df, report = validate_26as(df)
     assert report.duplicates_found == 1
     assert any(i.code == "DUPLICATE_26AS" for i in report.issues)
+    # Duplicate row should be rejected — only first occurrence kept
+    assert validated_df["_valid"].sum() == 1
 
 
 def test_different_rows_not_duplicates():

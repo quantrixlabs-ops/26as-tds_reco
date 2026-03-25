@@ -28,7 +28,7 @@ import { Badge } from '../components/ui/Badge';
 import { Table, type Column } from '../components/ui/Table';
 import { FullPageSpinner } from '../components/ui/Spinner';
 import {
-  formatDate,
+  formatDateTime,
   formatPct,
   runStatusVariant,
   runStatusLabel,
@@ -143,7 +143,7 @@ export default function DashboardPage() {
       header: 'Created',
       sortable: true,
       render: (r) => (
-        <span className="text-xs text-gray-500">{formatDate(r.created_at)}</span>
+        <span className="text-xs text-gray-500">{formatDateTime(r.created_at)}</span>
       ),
     },
   ];

@@ -59,6 +59,7 @@ def score_candidate(
     candidate: BookCandidate,
     sap_section_map: Optional[dict] = None,   # future: invoice_ref → section
     historical_score: float = 5.0,            # default neutral
+    enforce_before: bool = True,              # penalise books after 26AS date
 ) -> ScoreBreakdown:
     """
     Compute composite score for one candidate match.
@@ -70,6 +71,7 @@ def score_candidate(
         candidate: The set of SAP book entries being evaluated
         sap_section_map: Optional dict mapping invoice_ref → expected section
         historical_score: 0–10 from historical pattern (default 5 = neutral)
+        enforce_before: If True, heavily penalise books dated after 26AS date
 
     Returns:
         ScoreBreakdown with total and component scores
@@ -82,7 +84,7 @@ def score_candidate(
     variance_score = _score_variance(variance_pct) * 0.30
 
     # ── 2. Date Proximity Score (20%) ─────────────────────────────────────────
-    date_score = _score_date_proximity(as26_date, candidate.dates) * 0.20
+    date_score = _score_date_proximity(as26_date, candidate.dates, enforce_before=enforce_before) * 0.20
 
     # ── 3. Section Match Score (20%) ──────────────────────────────────────────
     section_score = _score_section(as26_section, candidate.invoice_refs, sap_section_map) * 0.20
@@ -115,7 +117,9 @@ def _score_variance(variance_pct: float) -> float:
     2%   → 75
     3%   → 55
     5%   → 20
-    >5%  → 0
+    10%  → 10
+    20%  → 2
+    >20% → 1
     """
     if variance_pct <= 0.01:
         return 100.0
@@ -127,12 +131,18 @@ def _score_variance(variance_pct: float) -> float:
         return 75.0 - ((variance_pct - 2.0) / 1.0) * 20.0   # 75 → 55
     if variance_pct <= 5.0:
         return 55.0 - ((variance_pct - 3.0) / 2.0) * 35.0   # 55 → 20
-    return max(0.0, 20.0 - (variance_pct - 5.0) * 5.0)
+    if variance_pct <= 10.0:
+        return 20.0 - ((variance_pct - 5.0) / 5.0) * 10.0   # 20 → 10
+    if variance_pct <= 20.0:
+        return 10.0 - ((variance_pct - 10.0) / 10.0) * 8.0  # 10 → 2
+    return 1.0
 
 
-def _score_date_proximity(as26_date_str: Optional[str], book_dates: List[Optional[str]]) -> float:
+def _score_date_proximity(as26_date_str: Optional[str], book_dates: List[Optional[str]], enforce_before: bool = True) -> float:
     """
     0–100 score based on proximity between 26AS transaction date and invoice dates.
+    Books BEFORE 26AS date (normal): standard proximity scoring
+    Books AFTER 26AS date: heavily penalized (if enforce_before, return 5)
     Within 30 days → 100
     30–90 days → linear decay from 100 to 60
     90–180 days → linear decay from 60 to 20
@@ -144,13 +154,21 @@ def _score_date_proximity(as26_date_str: Optional[str], book_dates: List[Optiona
         return 50.0
 
     valid_diffs = []
+    has_future_book = False
     for ds in book_dates:
         d = _parse_date(ds)
         if d:
-            valid_diffs.append(abs((as26_d - d).days))
+            diff_days = (as26_d - d).days  # positive = book is before 26AS
+            if diff_days < 0:
+                has_future_book = True
+            valid_diffs.append(abs(diff_days))
 
     if not valid_diffs:
         return 50.0
+
+    # If any book is after 26AS and we enforce before-only, heavy penalty
+    if enforce_before and has_future_book:
+        return 5.0
 
     min_diff = min(valid_diffs)
 
@@ -202,13 +220,17 @@ def _score_clearing_doc(clearing_doc: Optional[str]) -> float:
     return 20.0
 
 
+from functools import lru_cache
+
+@lru_cache(maxsize=8192)
 def _parse_date(date_str: Optional[str]) -> Optional[date]:
-    """Parse dd-Mon-YYYY or YYYY-MM-DD date strings."""
+    """Parse dd-Mon-YYYY or YYYY-MM-DD date strings. LRU-cached for performance."""
     if not date_str:
         return None
+    s = str(date_str).strip()
     for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
-            return datetime.strptime(str(date_str).strip(), fmt).date()
+            return datetime.strptime(s, fmt).date()
         except ValueError:
             continue
     return None

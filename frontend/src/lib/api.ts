@@ -9,7 +9,7 @@ export const BASE_URL = '';
 
 export const apiClient = axios.create({
   baseURL: BASE_URL,
-  timeout: 120_000,
+  timeout: 300_000,
 });
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
@@ -165,7 +165,17 @@ export interface RunSummary {
   as26_file_hash: string;
   created_at: string;
   completed_at: string | null;
+  mode: 'SINGLE' | 'BATCH';
+  batch_id: string | null;
   created_by?: string;
+}
+
+export interface ScoreBreakdown {
+  variance: number;
+  date_proximity: number;
+  section: number;
+  clearing_doc: number;
+  historical: number;
 }
 
 export interface MatchedPair {
@@ -184,17 +194,28 @@ export interface MatchedPair {
   invoice_dates: (string | null)[];
   invoice_amounts: number[];
   sgl_flags: string[];
+  composite_score?: number;
+  score_breakdown?: ScoreBreakdown;
+  clearing_doc?: string;
+  cross_fy?: boolean;
+  is_prior_year?: boolean;
+  ai_risk_flag?: boolean;
+  ai_risk_reason?: string | null;
+  remark?: string | null;
 }
 
 export interface Unmatched26AS {
+  id?: string;
   index: number;
   deductor_name: string;
   tan: string;
   section: string;
   date: string | null;
+  transaction_date?: string | null;
   amount: number;
   reason_code: string;
   reason_label: string;
+  reason_detail?: string;
 }
 
 export interface UnmatchedBook {
@@ -230,7 +251,7 @@ export interface BatchCandidate {
 export interface BatchMapping {
   sap_filename: string;
   identity_string: string;
-  status: 'AUTO_CONFIRMED' | 'PENDING' | 'NO_MATCH';
+  status: 'AUTO_CONFIRMED' | 'PENDING' | 'NO_MATCH' | 'NO_DEDUCTORS';
   confirmed_name: string | null;
   confirmed_tan: string | null;
   fuzzy_score: number | null;
@@ -246,6 +267,7 @@ export interface BatchParty {
 export interface BatchPreviewResponse {
   mappings: BatchMapping[];
   all_parties: BatchParty[];
+  no_deductors?: boolean;
 }
 
 export interface BatchRunSummary {
@@ -279,6 +301,118 @@ export interface FinancialYearsResponse {
   default: string;
 }
 
+// ── Admin Settings ──────────────────────────────────────────────────────
+
+export interface AdminSettings {
+  id: string;
+  doc_types_include: string[];
+  doc_types_exclude: string[];
+  date_hard_cutoff_days: number;
+  date_soft_preference_days: number;
+  enforce_books_before_26as: boolean;
+  variance_normal_ceiling_pct: number;
+  variance_suggested_ceiling_pct: number;
+  exclude_sgl_v: boolean;
+  max_combo_size: number;
+  date_clustering_preference: boolean;
+  allow_cross_fy: boolean;
+  cross_fy_lookback_years: number;
+  force_match_enabled: boolean;
+  noise_threshold: number;
+  updated_at: string | null;
+}
+
+export type AdminSettingsUpdate = Partial<Omit<AdminSettings, 'id' | 'updated_at'>>;
+
+// ── Suggested Matches ──────────────────────────────────────────────────
+
+export type SuggestedCategory =
+  | 'HIGH_VARIANCE_3_20'
+  | 'HIGH_VARIANCE_20_PLUS'
+  | 'DATE_SOFT_PREFERENCE'
+  | 'ADVANCE_PAYMENT'
+  | 'FORCE'
+  | 'CROSS_FY';
+
+export interface SuggestedMatch {
+  id: string;
+  run_id: string;
+  as26_index: number | null;
+  as26_amount: number | null;
+  as26_date: string | null;
+  section: string | null;
+  tan: string | null;
+  deductor_name: string | null;
+  invoice_refs: string[];
+  invoice_amounts: number[];
+  invoice_dates: (string | null)[];
+  clearing_doc: string | null;
+  books_sum: number;
+  match_type: string | null;
+  variance_amt: number;
+  variance_pct: number;
+  confidence: ConfidenceTier;
+  composite_score: number;
+  cross_fy: boolean;
+  is_prior_year: boolean;
+  category: SuggestedCategory;
+  requires_remarks: boolean;
+  alert_message: string | null;
+  authorized: boolean;
+  authorized_by_id: string | null;
+  authorized_at: string | null;
+  remarks: string | null;
+  rejected: boolean;
+  rejected_by_id: string | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+  created_at: string;
+}
+
+export interface SuggestedSummary {
+  total: number;
+  by_category: Record<string, number>;
+  authorized: number;
+  rejected: number;
+  pending: number;
+}
+
+// ── Progress Tracking ──────────────────────────────────────────────────────
+
+export type ProgressStatus =
+  | 'QUEUED'
+  | 'PARSING'
+  | 'VALIDATING'
+  | 'PHASE_A'
+  | 'PHASE_B_SINGLE'
+  | 'PHASE_B_COMBO'
+  | 'PHASE_C'
+  | 'PHASE_E'
+  | 'POST_VALIDATE'
+  | 'PERSISTING'
+  | 'EXCEPTIONS'
+  | 'FINALIZING'
+  | 'COMPLETE'
+  | 'FAILED'
+  | 'NOT_FOUND';
+
+export interface RunProgress {
+  run_id: string;
+  status: ProgressStatus;
+  stage_label: string;
+  overall_pct: number;
+  total_26as: number;
+  total_sap: number;
+  matched_so_far: number;
+  match_rate_so_far: number;
+  current_phase_detail: string;
+  elapsed_seconds: number;
+  eta_seconds: number | null;
+  stages_completed: string[];
+  started_at: number;
+  updated_at: number;
+}
+
 // ── Auth APIs ─────────────────────────────────────────────────────────────────
 
 export const authApi = {
@@ -307,11 +441,19 @@ export const runsApi = {
 
   get: (id: string) => apiClient.get<RunSummary>(`/api/runs/${id}`).then((r) => r.data),
 
-  create: (sapFile: File, as26File: File, financialYear: string) => {
+  create: (
+    sapFile: File,
+    as26File: File,
+    financialYear: string,
+    parties?: Array<{ deductor_name: string; tan: string }> | null,
+    runConfig?: Record<string, unknown> | null,
+  ) => {
     const form = new FormData();
     form.append('sap_file', sapFile);
     form.append('as26_file', as26File);
     form.append('financial_year', financialYear);
+    if (parties && parties.length > 0) form.append('mappings_json', JSON.stringify(parties));
+    if (runConfig) form.append('run_config_json', JSON.stringify(runConfig));
     return apiClient
       .post<{ run_id: string; run_number: number; status: RunStatus }>('/api/runs', form)
       .then((r) => r.data);
@@ -331,12 +473,14 @@ export const runsApi = {
     as26File: File,
     financialYear: string,
     mappings: Record<string, Array<{ deductor_name: string; tan: string }>>,
+    runConfig?: Record<string, unknown> | null,
   ) => {
     const form = new FormData();
     form.append('as26_file', as26File);
     sapFiles.forEach((f) => form.append('sap_files', f));
     form.append('financial_year', financialYear);
     form.append('mappings_json', JSON.stringify(mappings));
+    if (runConfig) form.append('run_config_json', JSON.stringify(runConfig));
     return apiClient
       .post<BatchRunResponse>('/api/runs/batch', form)
       .then((r) => r.data);
@@ -376,8 +520,87 @@ export const runsApi = {
 
   downloadUrl: (id: string) => `${BASE_URL}/api/runs/${id}/download`,
 
+  download: async (id: string) => {
+    const res = await apiClient.get(`/api/runs/${id}/download`, {
+      responseType: 'blob',
+    });
+    // Extract filename from Content-Disposition header or use a default
+    const disposition = res.headers['content-disposition'] || '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match?.[1] || `TDS_Reco_RUN_${id}.xlsx`;
+    // Trigger browser download
+    const url = window.URL.createObjectURL(res.data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+
+  batchDownload: async (batchId: string) => {
+    const res = await apiClient.get(`/api/runs/batch/${batchId}/download`, {
+      responseType: 'blob',
+    });
+    const disposition = res.headers['content-disposition'] || '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match?.[1] || `TDS_Batch_${batchId}.xlsx`;
+    const url = window.URL.createObjectURL(res.data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+
+  batchRerun: (batchId: string) =>
+    apiClient
+      .post<{ batch_id: string; runs: Array<{ run_id: string; run_number: number; sap_filename: string; status: string }>; total: number }>(
+        `/api/runs/batch/${batchId}/rerun`,
+      )
+      .then((r) => r.data),
+
   auditTrail: (id: string) =>
     apiClient.get<AuditEvent[]>(`/api/runs/${id}/audit-trail`).then((r) => r.data),
+
+  progress: (id: string) =>
+    apiClient.get<RunProgress>(`/api/runs/${id}/progress`).then((r) => r.data),
+
+  /** Returns an EventSource URL for SSE progress streaming. */
+  progressStreamUrl: (id: string) => `${BASE_URL}/api/runs/${id}/progress/stream`,
+
+  cancel: (id: string) =>
+    apiClient.post<{ status: string; run_id: string }>(`/api/runs/${id}/cancel`).then((r) => r.data),
+
+  delete: (id: string) =>
+    apiClient.delete<{ status: string; run_id: string; run_number: number }>(`/api/runs/${id}`).then((r) => r.data),
+
+  suggested: (id: string) =>
+    apiClient.get<SuggestedMatch[]>(`/api/runs/${id}/suggested`).then((r) => r.data),
+
+  suggestedSummary: (id: string) =>
+    apiClient.get<SuggestedSummary>(`/api/runs/${id}/suggested/summary`).then((r) => r.data),
+
+  authorizeSuggested: (runId: string, ids: string[], remarks?: string) =>
+    apiClient
+      .post<{ success_count: number; promoted_count: number }>(`/api/runs/${runId}/suggested/authorize`, { ids, remarks })
+      .then((r) => r.data),
+
+  rejectSuggested: (runId: string, ids: string[], reason?: string) =>
+    apiClient
+      .post<{ rejected: number }>(`/api/runs/${runId}/suggested/reject`, { ids, reason })
+      .then((r) => r.data),
+
+  batchAuthorizeAllSuggested: (batchId: string, remarks?: string) =>
+    apiClient
+      .post<{ success_count: number; promoted_count: number; skipped_requires_remarks: number; runs_affected: number }>(
+        `/api/runs/batch/${batchId}/suggested/authorize-all`,
+        remarks ? { remarks } : {},
+      )
+      .then((r) => r.data),
 };
 
 // ── Misc APIs ─────────────────────────────────────────────────────────────────
@@ -387,4 +610,17 @@ export const miscApi = {
     apiClient.get<FinancialYearsResponse>('/api/financial-years').then((r) => r.data),
 
   health: () => apiClient.get('/api/health').then((r) => r.data),
+};
+
+// ── Settings APIs ────────────────────────────────────────────────────────
+
+export const settingsApi = {
+  get: () =>
+    apiClient.get<AdminSettings>('/api/settings').then((r) => r.data),
+
+  update: (data: AdminSettingsUpdate) =>
+    apiClient.put<AdminSettings>('/api/settings', data).then((r) => r.data),
+
+  history: () =>
+    apiClient.get<AdminSettings[]>('/api/settings/history').then((r) => r.data),
 };
