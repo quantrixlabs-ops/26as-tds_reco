@@ -6,10 +6,12 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { User, Mail, Lock, AlertCircle, ShieldCheck } from 'lucide-react';
+import { User, Mail, AlertCircle, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { getErrorMessage, cn } from '../lib/utils';
 import { Spinner } from '../components/ui/Spinner';
+import { PasswordInput } from '../components/ui/PasswordInput';
+import { PasswordStrengthMeter } from '../components/ui/PasswordStrengthMeter';
 
 const schema = z
   .object({
@@ -32,9 +34,12 @@ export default function SetupPage() {
   const {
     register,
     handleSubmit,
+    watch,
     setError,
     formState: { errors, isSubmitting },
   } = useForm<FormData>({ resolver: zodResolver(schema) });
+
+  const passwordValue = watch('password', '');
 
   useEffect(() => {
     if (isAuthenticated) navigate('/', { replace: true });
@@ -125,18 +130,16 @@ export default function SetupPage() {
               <label className="block text-xs font-semibold text-gray-700 mb-1.5">
                 Password
               </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="password"
-                  placeholder="At least 8 characters"
-                  className={inputClass(!!errors.password)}
-                  {...register('password')}
-                />
-              </div>
+              <PasswordInput
+                autoComplete="new-password"
+                placeholder="At least 8 characters"
+                hasError={!!errors.password}
+                {...register('password')}
+              />
               {errors.password && (
                 <p className="text-xs text-red-600 mt-1">{errors.password.message}</p>
               )}
+              <PasswordStrengthMeter password={passwordValue} />
             </div>
 
             {/* Confirm password */}
@@ -144,15 +147,12 @@ export default function SetupPage() {
               <label className="block text-xs font-semibold text-gray-700 mb-1.5">
                 Confirm password
               </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="password"
-                  placeholder="Repeat password"
-                  className={inputClass(!!errors.confirm_password)}
-                  {...register('confirm_password')}
-                />
-              </div>
+              <PasswordInput
+                autoComplete="new-password"
+                placeholder="Repeat password"
+                hasError={!!errors.confirm_password}
+                {...register('confirm_password')}
+              />
               {errors.confirm_password && (
                 <p className="text-xs text-red-600 mt-1">
                   {errors.confirm_password.message}

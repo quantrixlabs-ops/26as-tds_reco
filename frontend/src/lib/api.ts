@@ -3,9 +3,9 @@
  */
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 
-// Empty string = use Vite proxy (/api/* → http://localhost:8000)
-// Avoids cross-origin requests entirely in development
-export const BASE_URL = '';
+// In dev: empty string uses Vite proxy (/api/* → http://localhost:8000)
+// In prod: set VITE_API_URL to your backend URL (e.g. https://your-backend.railway.app)
+export const BASE_URL = import.meta.env.VITE_API_URL || '';
 
 export const apiClient = axios.create({
   baseURL: BASE_URL,
@@ -132,6 +132,7 @@ export interface User {
   email: string;
   full_name: string;
   role: Role;
+  is_verified?: boolean;
 }
 
 export interface AuthResponse {
@@ -140,6 +141,26 @@ export interface AuthResponse {
   user_id: string;
   role: Role;
   full_name: string;
+  is_verified?: boolean;
+}
+
+export interface SecurityQuestionInput {
+  question: string;
+  answer: string;
+}
+
+export interface RegisterPayload {
+  email: string;
+  password: string;
+  full_name: string;
+  security_questions?: SecurityQuestionInput[];
+}
+
+export interface PasswordStrengthResult {
+  strength: number;
+  strength_label: string;
+  valid: boolean;
+  errors: string[];
 }
 
 export interface RunSummary {
@@ -422,8 +443,11 @@ export interface RunProgress {
 // ── Auth APIs ─────────────────────────────────────────────────────────────────
 
 export const authApi = {
-  login: (email: string, password: string) =>
-    apiClient.post<AuthResponse>('/api/auth/login', { email, password }).then((r) => r.data),
+  login: (email: string, password: string, remember_me?: boolean) =>
+    apiClient.post<AuthResponse>('/api/auth/login', { email, password, remember_me }).then((r) => r.data),
+
+  register: (payload: RegisterPayload) =>
+    apiClient.post<User>('/api/auth/register', payload).then((r) => r.data),
 
   setupAdmin: (email: string, password: string, full_name: string) =>
     apiClient
@@ -438,6 +462,27 @@ export const authApi = {
     apiClient
       .post<User>('/api/auth/users', { email, password, full_name, role })
       .then((r) => r.data),
+
+  verifyEmail: (token: string) =>
+    apiClient.post<{ message: string }>('/api/auth/verify-email', { token }).then((r) => r.data),
+
+  resendVerification: (email: string) =>
+    apiClient.post<{ message: string }>('/api/auth/resend-verification', { email }).then((r) => r.data),
+
+  forgotPassword: (email: string) =>
+    apiClient.post<{ message: string }>('/api/auth/forgot-password', { email }).then((r) => r.data),
+
+  resetPassword: (token: string, new_password: string) =>
+    apiClient.post<{ message: string }>('/api/auth/reset-password', { token, new_password }).then((r) => r.data),
+
+  checkPasswordStrength: (password: string) =>
+    apiClient.post<PasswordStrengthResult>('/api/auth/password-strength', { password }).then((r) => r.data),
+
+  getSecurityQuestions: (email: string) =>
+    apiClient.get<{ questions: string[] }>(`/api/auth/security-questions?email=${encodeURIComponent(email)}`).then((r) => r.data),
+
+  verifySecurityQuestions: (email: string, answers: SecurityQuestionInput[]) =>
+    apiClient.post<{ verified: boolean }>('/api/auth/verify-security-questions', { email, answers }).then((r) => r.data),
 };
 
 // ── Runs APIs ─────────────────────────────────────────────────────────────────

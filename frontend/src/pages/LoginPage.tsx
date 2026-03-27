@@ -1,19 +1,21 @@
 /**
- * Login page — JWT auth form
+ * Login page — JWT auth with show/hide password, remember me, forgot password link
  */
 import { useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Lock, Mail, AlertCircle } from 'lucide-react';
+import { Mail, AlertCircle } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { getErrorMessage, cn } from '../lib/utils';
 import { Spinner } from '../components/ui/Spinner';
+import { PasswordInput } from '../components/ui/PasswordInput';
 
 const schema = z.object({
   email: z.string().email('Enter a valid email'),
   password: z.string().min(1, 'Password is required'),
+  remember_me: z.boolean().optional(),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -27,7 +29,10 @@ export default function LoginPage() {
     handleSubmit,
     setError,
     formState: { errors, isSubmitting },
-  } = useForm<FormData>({ resolver: zodResolver(schema) });
+  } = useForm<FormData>({
+    resolver: zodResolver(schema),
+    defaultValues: { remember_me: false },
+  });
 
   useEffect(() => {
     if (isAuthenticated) navigate('/', { replace: true });
@@ -35,7 +40,7 @@ export default function LoginPage() {
 
   const onSubmit = async (data: FormData) => {
     try {
-      await login(data.email, data.password);
+      await login(data.email, data.password, data.remember_me);
       navigate('/', { replace: true });
     } catch (err) {
       setError('root', { message: getErrorMessage(err) });
@@ -95,24 +100,41 @@ export default function LoginPage() {
               )}
             </div>
 
-            {/* Password */}
+            {/* Password with show/hide toggle */}
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="password"
-                  autoComplete="current-password"
-                  placeholder="••••••••"
-                  className={inputClass(!!errors.password)}
-                  {...register('password')}
-                />
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-gray-700">
+                  Password
+                </label>
+                <Link
+                  to="/forgot-password"
+                  className="text-xs text-[#1B3A5C] hover:underline font-medium"
+                >
+                  Forgot password?
+                </Link>
               </div>
+              <PasswordInput
+                autoComplete="current-password"
+                placeholder="Enter your password"
+                hasError={!!errors.password}
+                {...register('password')}
+              />
               {errors.password && (
                 <p className="text-xs text-red-600 mt-1">{errors.password.message}</p>
               )}
+            </div>
+
+            {/* Remember me */}
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="remember_me"
+                className="h-3.5 w-3.5 rounded border-gray-300 text-[#1B3A5C] focus:ring-[#1B3A5C]"
+                {...register('remember_me')}
+              />
+              <label htmlFor="remember_me" className="text-xs text-gray-600 select-none">
+                Remember me for 30 days
+              </label>
             </div>
 
             {/* Submit */}
@@ -128,21 +150,29 @@ export default function LoginPage() {
               )}
             >
               {isSubmitting ? <Spinner size="sm" className="border-white/30 border-t-white" /> : null}
-              {isSubmitting ? 'Signing in…' : 'Sign in'}
+              {isSubmitting ? 'Signing in...' : 'Sign in'}
             </button>
           </form>
 
-          {/* Setup link */}
-          <p className="text-center text-xs text-gray-400 mt-6">
-            First time?{' '}
-            <Link to="/setup" className="text-[#1B3A5C] font-medium hover:underline">
-              Set up admin account
-            </Link>
-          </p>
+          {/* Links */}
+          <div className="text-center space-y-2 mt-6">
+            <p className="text-xs text-gray-400">
+              Don't have an account?{' '}
+              <Link to="/signup" className="text-[#1B3A5C] font-medium hover:underline">
+                Create account
+              </Link>
+            </p>
+            <p className="text-xs text-gray-400">
+              First time?{' '}
+              <Link to="/setup" className="text-[#1B3A5C] font-medium hover:underline">
+                Set up admin account
+              </Link>
+            </p>
+          </div>
         </div>
 
         <p className="text-center text-xs text-white/30 mt-6">
-          Section 199 Income Tax Act · Secure TDS Reconciliation
+          Section 199 Income Tax Act &middot; Secure TDS Reconciliation
         </p>
       </div>
     </div>

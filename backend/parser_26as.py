@@ -40,6 +40,7 @@ _STATUS_ALIASES = re.compile(r"status\s+of\s+booking|^status\s+of\b", re.IGNOREC
 _DATE_ALIASES   = re.compile(r"transaction\s+date|^date$|date\s+of\s+(payment|credit)", re.IGNORECASE)
 _SECTION_ALIAS  = re.compile(r"^section$", re.IGNORECASE)
 _INVOICE_ALIAS  = re.compile(r"invoice\s+number|^invoice\s*no", re.IGNORECASE)
+_TDS_AMT_ALIAS  = re.compile(r"tax\s+deducted|tds\s+deducted|^tds$|tax\s+amount", re.IGNORECASE)
 
 
 def _normalise_col(name: str) -> Optional[str]:
@@ -51,6 +52,7 @@ def _normalise_col(name: str) -> Optional[str]:
     if _DATE_ALIASES.search(s):     return "transaction_date"
     if _SECTION_ALIAS.match(s):     return "section"
     if _INVOICE_ALIAS.search(s):    return "invoice_number"
+    if _TDS_AMT_ALIAS.search(s):    return "tds_amount"
     return None
 
 
@@ -220,12 +222,22 @@ def parse_26as(
                 date_excluded_count += 1
                 continue
 
+        # Parse TDS amount (optional — activates rate validator when present)
+        raw_tds = mapped.get("tds_amount")
+        tds_amount = None
+        if raw_tds is not None:
+            try:
+                tds_amount = float(raw_tds)
+            except (ValueError, TypeError):
+                pass
+
         rows.append({
             "deductor_name":    str(mapped.get("deductor_name") or "").strip(),
             "tan":              str(mapped.get("tan") or "").strip().upper(),
             "section":          str(mapped.get("section") or "").strip(),
             "transaction_date": _parse_date(mapped.get("transaction_date")),
             "amount":           amount,
+            "tds_amount":       tds_amount,
             "status":           "F",
             "invoice_number":   str(mapped.get("invoice_number") or "").strip()
                                 if mapped.get("invoice_number") else "",
@@ -238,7 +250,7 @@ def parse_26as(
         logger.warning("26AS parse returned 0 rows with Status=F")
         return pd.DataFrame(columns=[
             "deductor_name", "tan", "section", "transaction_date",
-            "amount", "status", "invoice_number"
+            "amount", "tds_amount", "status", "invoice_number"
         ])
 
     if non_f_count > 0:

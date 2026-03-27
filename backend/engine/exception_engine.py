@@ -31,6 +31,14 @@ def generate_exceptions(
     """
     exceptions: List[dict] = []
 
+    # ── Section cross-reference map (for mismatch detection) ─────────────────
+    # Known sections that are commonly confused with each other
+    SECTION_CONFLICT_PAIRS = {
+        ("194C", "194J"), ("194J", "194C"),  # Contractor vs Professional fees
+        ("194I", "194IB"), ("194IB", "194I"),  # Rent categories
+        ("194A", "193"), ("193", "194A"),  # Interest categories
+    }
+
     # ── From matched pairs ────────────────────────────────────────────────────
     for result in matched:
         # 1. FORCE matches
@@ -96,7 +104,23 @@ def generate_exceptions(
                 section=result.as26_section,
             ))
 
-        # 5. TAN validation — flag if 26AS TAN looks invalid
+        # 5. TIMING_MISMATCH — flag when book dates are significantly after 26AS date
+        if result.days_gap is not None and result.days_gap < -45:
+            exceptions.append(_exc(
+                run_id=run_id,
+                exception_type="AI_RISK_FLAG",
+                severity="MEDIUM",
+                description=(
+                    f"Timing mismatch: invoice date is {abs(result.days_gap)} days AFTER 26AS date. "
+                    f"Section: {result.as26_section}. "
+                    f"Amount: ₹{result.as26_amount:,.2f}. "
+                    f"Possible backdated or late-filed entry."
+                ),
+                amount=result.as26_amount,
+                section=result.as26_section,
+            ))
+
+        # 6. TAN validation — flag if 26AS TAN looks invalid
         if hasattr(result, 'as26_section') and result.as26_section:
             import re
             tan_pattern = re.compile(r'^[A-Z]{4}[0-9]{5}[A-Z]$')
@@ -132,6 +156,35 @@ def generate_exceptions(
                 amount=entry.amount,
                 section=entry.section,
             ))
+
+    # ── Section mismatch detection across matched pairs ──────────────────────
+    # Group matched entries by section and flag ambiguous section assignments
+    section_amounts: dict[str, float] = {}
+    for result in matched:
+        sec = (result.as26_section or "").strip()
+        if sec:
+            section_amounts[sec] = section_amounts.get(sec, 0) + result.as26_amount
+
+    # Check for known conflicting section pairs in the same run
+    seen_sections = set(section_amounts.keys())
+    flagged_pairs: set[tuple] = set()
+    for s1 in seen_sections:
+        for s2 in seen_sections:
+            pair = tuple(sorted([s1, s2]))
+            if (s1, s2) in SECTION_CONFLICT_PAIRS and pair not in flagged_pairs:
+                flagged_pairs.add(pair)
+                exceptions.append(_exc(
+                    run_id=run_id,
+                    exception_type="SECTION_MISMATCH",
+                    severity="MEDIUM",
+                    description=(
+                        f"Both sections {pair[0]} (₹{section_amounts.get(pair[0], 0):,.2f}) and "
+                        f"{pair[1]} (₹{section_amounts.get(pair[1], 0):,.2f}) appear in the same run. "
+                        f"These sections are commonly confused — verify correct classification."
+                    ),
+                    amount=None,
+                    section=f"{pair[0]}/{pair[1]}",
+                ))
 
     # ── From validation report ─────────────────────────────────────────────────
     for issue in validation_report.issues:

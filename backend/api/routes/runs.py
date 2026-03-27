@@ -15,8 +15,9 @@ from pydantic import BaseModel
 from sqlalchemy import select, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.audit import log_event
+from core.audit import log_event, verify_audit_chain
 from core.deps import get_current_user, require_reviewer
+from core.security import sha256_file
 from core.settings import settings
 from db.base import get_db
 from db.models import ReconciliationRun, MatchedPair, Unmatched26AS, UnmatchedBook, ExceptionRecord, User, SuggestedMatch
@@ -514,7 +515,7 @@ async def batch_authorize_all_suggested(
         if hash_key:
             promoted_hashes.setdefault(sm.run_id, set()).add(hash_key)
 
-        # Remove from Unmatched26AS
+        # Soft-delete: mark Unmatched26AS as PROMOTED (preserves audit trail)
         if sm.as26_row_hash:
             u_result = await db.execute(
                 select(Unmatched26AS).where(
@@ -524,7 +525,9 @@ async def batch_authorize_all_suggested(
             )
             u_entry = u_result.scalar_one_or_none()
             if u_entry:
-                await db.delete(u_entry)
+                u_entry.status = "PROMOTED"
+                u_entry.promoted_at = now
+                u_entry.promoted_by_id = current_user.id
 
         # Track per-run promotion counts
         promoted_per_run[sm.run_id] = promoted_per_run.get(sm.run_id, 0) + 1
@@ -545,7 +548,7 @@ async def batch_authorize_all_suggested(
         )
         run.matched_count = count_result.scalar() or 0
         unmatched_result = await db.execute(
-            select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == rid)
+            select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == rid, Unmatched26AS.status == "ACTIVE")
         )
         run.unmatched_26as_count = unmatched_result.scalar() or 0
         if run.total_26as_entries and run.total_26as_entries > 0:
@@ -576,6 +579,21 @@ async def batch_authorize_all_suggested(
         )
         skipped = skipped_result.scalar() or 0
 
+    # Per-item audit trail: log each authorized suggestion with amount and match details
+    authorized_items = []
+    for sm in pending:
+        if sm.authorized:
+            authorized_items.append({
+                "suggested_match_id": sm.id,
+                "run_id": sm.run_id,
+                "as26_amount": sm.as26_amount,
+                "books_sum": sm.books_sum,
+                "variance_pct": round(sm.variance_pct, 2),
+                "match_type": sm.match_type,
+                "confidence": sm.confidence,
+                "invoice_refs": sm.invoice_refs,
+            })
+
     await log_event(db, "BATCH_SUGGESTED_AUTHORIZED",
                     f"Batch authorize-all: {success_count} suggested match(es) authorized across "
                     f"{len(promoted_per_run)} run(s) in batch {batch_id} by {current_user.full_name}",
@@ -583,7 +601,8 @@ async def batch_authorize_all_suggested(
                     metadata={"batch_id": batch_id, "count": success_count,
                               "runs_affected": len(promoted_per_run),
                               "skipped_requires_remarks": skipped,
-                              "remarks": remarks})
+                              "remarks": remarks,
+                              "authorized_items": authorized_items})
 
     return {
         "success_count": success_count,
@@ -624,7 +643,7 @@ async def get_run(
             run.suggested_count = suggested_ct.scalar() or 0
 
             unmatched_ct = await db.execute(
-                select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == run_id)
+                select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == run_id, Unmatched26AS.status == "ACTIVE")
             )
             run.unmatched_26as_count = unmatched_ct.scalar() or 0
 
@@ -727,7 +746,7 @@ async def get_unmatched_26as(
 ):
     await _get_run_or_404(run_id, db)
     result = await db.execute(
-        select(Unmatched26AS).where(Unmatched26AS.run_id == run_id)
+        select(Unmatched26AS).where(Unmatched26AS.run_id == run_id, Unmatched26AS.status == "ACTIVE")
         .order_by(desc(Unmatched26AS.amount))
     )
     entries = result.scalars().all()
@@ -824,7 +843,7 @@ async def review_run(
             )
         )).scalar() or 0
         live_unmatched = (await db.execute(
-            select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == run_id)
+            select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == run_id, Unmatched26AS.status == "ACTIVE")
         )).scalar() or 0
         accounted = live_matched + live_suggested + live_unmatched
         if accounted != run.total_26as_entries:
@@ -882,14 +901,19 @@ async def review_run(
                         MatchedPair.as26_row_hash == sm.as26_row_hash,
                     )
                 )
-                # Re-create Unmatched26AS entry (restored from suggested match data)
+                # Restore Unmatched26AS entry (revert soft-delete, or create if missing)
                 existing_u = await db.execute(
                     select(Unmatched26AS).where(
                         Unmatched26AS.run_id == run_id,
                         Unmatched26AS.as26_row_hash == sm.as26_row_hash,
                     )
                 )
-                if not existing_u.scalar_one_or_none():
+                u_entry = existing_u.scalar_one_or_none()
+                if u_entry:
+                    u_entry.status = "ACTIVE"
+                    u_entry.promoted_at = None
+                    u_entry.promoted_by_id = None
+                else:
                     db.add(Unmatched26AS(
                         run_id=run_id,
                         as26_row_hash=sm.as26_row_hash,
@@ -919,7 +943,7 @@ async def review_run(
             )
             run.matched_count = count_result.scalar() or 0
             unmatched_result = await db.execute(
-                select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == run_id)
+                select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == run_id, Unmatched26AS.status == "ACTIVE")
             )
             run.unmatched_26as_count = unmatched_result.scalar() or 0
             suggested_result = await db.execute(
@@ -1656,7 +1680,7 @@ async def authorize_suggested_matches(
         if hash_key:
             promoted_hashes.add(hash_key)
 
-        # Remove from Unmatched26AS (if entry exists there)
+        # Soft-delete: mark Unmatched26AS as PROMOTED (preserves audit trail)
         if sm.as26_row_hash:
             u_result = await db.execute(
                 select(Unmatched26AS).where(
@@ -1666,7 +1690,9 @@ async def authorize_suggested_matches(
             )
             u_entry = u_result.scalar_one_or_none()
             if u_entry:
-                await db.delete(u_entry)
+                u_entry.status = "PROMOTED"
+                u_entry.promoted_at = now
+                u_entry.promoted_by_id = current_user.id
 
         promoted_count += 1
 
@@ -1681,7 +1707,7 @@ async def authorize_suggested_matches(
         )
         run.matched_count = count_result.scalar() or 0
         unmatched_result = await db.execute(
-            select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == run_id)
+            select(func.count(Unmatched26AS.id)).where(Unmatched26AS.run_id == run_id, Unmatched26AS.status == "ACTIVE")
         )
         run.unmatched_26as_count = unmatched_result.scalar() or 0
         # ── Recount suggested_count (pending only — not authorized/rejected) ──
@@ -2040,6 +2066,8 @@ def _mp_to_dict(p: MatchedPair) -> dict:
         "invoice_dates": p.invoice_dates, "clearing_doc": p.clearing_doc,
         "cross_fy": p.cross_fy, "is_prior_year": p.is_prior_year,
         "ai_risk_flag": p.ai_risk_flag, "ai_risk_reason": p.ai_risk_reason,
+        "alert_message": p.alert_message,
+        "alternative_matches": p.alternative_matches,
         "remark": p.remark,
     }
 
@@ -2096,3 +2124,135 @@ def _suggested_to_out(s: SuggestedMatch) -> SuggestedMatchOut:
         rejection_reason=s.rejection_reason,
         created_at=s.created_at.isoformat(),
     )
+
+
+# ── Compliance Report Endpoint ────────────────────────────────────────────────
+
+@router.get("/{run_id}/compliance-report")
+async def get_compliance_report(
+    run_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate a comprehensive compliance report for a reconciliation run.
+    Covers: determinism proof, config snapshot, score distributions,
+    constraint compliance, exception summary, and audit chain integrity.
+    """
+    run = await _get_run_or_404(run_id, db)
+
+    # 1. Score distribution
+    mp_result = await db.execute(
+        select(MatchedPair).where(MatchedPair.run_id == run_id)
+    )
+    matched_pairs = list(mp_result.scalars().all())
+
+    score_dist = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    type_dist: dict = {}
+    total_variance_amt = 0.0
+    max_variance_pct = 0.0
+    section_199_violations = 0
+    invoice_refs_seen: set = set()
+    invoice_reuse_count = 0
+
+    for mp in matched_pairs:
+        conf = (mp.confidence or "LOW").upper()
+        score_dist[conf] = score_dist.get(conf, 0) + 1
+        mt = mp.match_type or "UNKNOWN"
+        type_dist[mt] = type_dist.get(mt, 0) + 1
+        total_variance_amt += abs(mp.variance_amt)
+        max_variance_pct = max(max_variance_pct, mp.variance_pct)
+
+        # Section 199 check: books_sum must not exceed as26_amount
+        if mp.books_sum > mp.as26_amount + 0.01:
+            section_199_violations += 1
+
+        # Invoice reuse check
+        if mp.invoice_refs:
+            for ref in mp.invoice_refs:
+                if ref in invoice_refs_seen:
+                    invoice_reuse_count += 1
+                invoice_refs_seen.add(ref)
+
+    # 2. Exception summary
+    exc_result = await db.execute(
+        select(ExceptionRecord).where(ExceptionRecord.run_id == run_id)
+    )
+    exceptions = list(exc_result.scalars().all())
+    exc_summary = {}
+    unreviewed_count = 0
+    for exc in exceptions:
+        exc_summary[exc.exception_type] = exc_summary.get(exc.exception_type, 0) + 1
+        if not exc.reviewed:
+            unreviewed_count += 1
+
+    # 3. Reproducibility proof
+    file_integrity = {
+        "sap_file_hash": run.sap_file_hash,
+        "as26_file_hash": run.as26_file_hash,
+        "output_hash": run.output_hash,
+        "sap_blob_stored": run.sap_file_blob is not None,
+        "as26_blob_stored": run.as26_file_blob is not None,
+        "admin_settings_id": run.admin_settings_id,
+    }
+
+    # Re-verify stored blobs match recorded hashes
+    blob_verification = {"sap_verified": None, "as26_verified": None}
+    if run.sap_file_blob:
+        actual_hash = sha256_file(run.sap_file_blob)
+        blob_verification["sap_verified"] = actual_hash == run.sap_file_hash
+    if run.as26_file_blob:
+        actual_hash = sha256_file(run.as26_file_blob)
+        blob_verification["as26_verified"] = actual_hash == run.as26_file_hash
+
+    # 4. Audit trail integrity
+    from pathlib import Path
+    audit_dir = Path(settings.AUDIT_LOG_DIR)
+    audit_files = sorted(audit_dir.glob("audit_*.jsonl"))
+    audit_chain_results = []
+    for af in audit_files[-5:]:  # Check last 5 days
+        result = verify_audit_chain(str(af))
+        audit_chain_results.append({
+            "file": af.name,
+            "valid": result["valid"],
+            "lines": result["total_lines"],
+            "error": result.get("error"),
+        })
+
+    return {
+        "run_id": run_id,
+        "algorithm_version": run.algorithm_version,
+        "config_snapshot": run.config_snapshot,
+        "admin_settings_id": run.admin_settings_id,
+        "compliance": {
+            "section_199_violations": section_199_violations,
+            "invoice_reuse_violations": invoice_reuse_count,
+            "max_variance_pct": round(max_variance_pct, 4),
+            "total_variance_amount": round(total_variance_amt, 2),
+            "books_exceed_26as": section_199_violations == 0,
+            "no_invoice_reuse": invoice_reuse_count == 0,
+            "constraint_violations": run.constraint_violations,
+        },
+        "statistics": {
+            "total_26as_entries": run.total_26as_entries,
+            "total_sap_entries": run.total_sap_entries,
+            "matched_count": run.matched_count,
+            "match_rate_pct": round(run.match_rate_pct, 2),
+            "confidence_distribution": score_dist,
+            "match_type_distribution": type_dist,
+        },
+        "control_totals": {
+            "total_26as_amount": run.total_26as_amount,
+            "matched_amount": run.matched_amount,
+            "unmatched_26as_amount": run.unmatched_26as_amount,
+            "balanced": run.control_total_balanced,
+        },
+        "exceptions": {
+            "total": len(exceptions),
+            "unreviewed": unreviewed_count,
+            "by_type": exc_summary,
+        },
+        "file_integrity": file_integrity,
+        "blob_verification": blob_verification,
+        "audit_chain": audit_chain_results,
+    }

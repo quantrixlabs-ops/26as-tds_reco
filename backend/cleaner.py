@@ -166,6 +166,20 @@ def clean_sap_books(
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
     ws = wb.active
 
+    # ── SAP header structure validation ──────────────────────────────────────
+    # Verify the file has enough columns and the header row looks reasonable.
+    # SAP columns are positional (not by name), so we validate structure, not labels.
+    header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+    if header_row is not None:
+        col_count = len([c for c in header_row if c is not None])
+        if col_count < 10:
+            logger.warning(
+                "SAP file has only %d non-null header columns (expected ≥15). "
+                "Columns are positional — ensure this is a raw SAP AR Ledger export, "
+                "not a pre-processed workings file.",
+                col_count,
+            )
+
     # Use configurable doc types or fall back to defaults
     primary_doc_types = set(doc_types_include) if doc_types_include else PRIMARY_DOC_TYPES
     exclude_doc_types_set = set(doc_types_exclude) if doc_types_exclude else EXCLUDE_DOC_TYPES

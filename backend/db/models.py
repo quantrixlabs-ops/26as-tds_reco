@@ -96,6 +96,7 @@ class ReconciliationRun(Base):
     # Versioning
     algorithm_version: Mapped[str] = mapped_column(String(20), nullable=False)
     config_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # config.py state at run time
+    admin_settings_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("admin_settings.id"), nullable=True)  # exact settings version used
 
     # Status
     status: Mapped[str] = mapped_column(
@@ -231,7 +232,7 @@ class MatchedPair(Base):
 
 
 class Unmatched26AS(Base):
-    """26AS entries with no matching SAP invoice."""
+    """26AS entries with no matching SAP invoice. Soft-deleted when promoted to matched."""
     __tablename__ = "unmatched_26as"
     __table_args__ = (
         Index("ix_unmatched_26as_run_id", "run_id"),
@@ -252,6 +253,11 @@ class Unmatched26AS(Base):
     reason_detail: Mapped[str] = mapped_column(Text, nullable=False)
     best_candidate_invoice: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     best_candidate_variance_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Soft-delete: ACTIVE → PROMOTED (when authorized as suggested match) or ARCHIVED
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    promoted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    promoted_by_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     run: Mapped["ReconciliationRun"] = relationship("ReconciliationRun", back_populates="unmatched_26as")
@@ -468,6 +474,63 @@ class SuggestedMatch(Base):
 
     # Relationships
     run: Mapped["ReconciliationRun"] = relationship("ReconciliationRun", back_populates="suggested_matches")
+
+
+# ── Run Counter ───────────────────────────────────────────────────────────────
+
+# ── Auth Security Tables ─────────────────────────────────────────────────────
+
+class PasswordResetToken(Base):
+    """Time-limited, single-use password reset tokens."""
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)  # SHA-256 of token
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EmailVerificationToken(Base):
+    """Email verification tokens sent on registration."""
+    __tablename__ = "email_verification_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SecurityQuestion(Base):
+    """Hashed security question answers set during registration."""
+    __tablename__ = "security_questions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    question: Mapped[str] = mapped_column(String(255), nullable=False)
+    answer_hash: Mapped[str] = mapped_column(String(255), nullable=False)  # bcrypt hash
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LoginAttempt(Base):
+    """Audit trail for login attempts (successful and failed)."""
+    __tablename__ = "login_attempts"
+    __table_args__ = (
+        Index("ix_login_attempts_email", "email"),
+        Index("ix_login_attempts_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    failure_reason: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ── Run Counter ───────────────────────────────────────────────────────────────

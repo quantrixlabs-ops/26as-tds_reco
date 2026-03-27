@@ -305,3 +305,27 @@ def compute_control_totals(
         "difference": round(difference, 2),
         "balanced": balanced,
     }
+
+
+def compute_pre_match_control_totals(
+    total_26as_amount: float,
+    total_26as_count: int,
+    total_sap_amount: float,
+    total_sap_count: int,
+) -> dict:
+    """
+    Pre-match control totals — computed BEFORE matching begins.
+    Compares aggregate amounts between 26AS and SAP for initial sanity check.
+    """
+    coverage_ratio = (total_sap_amount / total_26as_amount * 100) if total_26as_amount > 0 else 0.0
+    amount_gap = total_26as_amount - total_sap_amount
+
+    return {
+        "total_26as_amount": round(total_26as_amount, 2),
+        "total_26as_count": total_26as_count,
+        "total_sap_amount": round(total_sap_amount, 2),
+        "total_sap_count": total_sap_count,
+        "coverage_ratio_pct": round(coverage_ratio, 2),
+        "amount_gap": round(amount_gap, 2),
+        "sap_covers_26as": coverage_ratio >= 95.0,
+    }

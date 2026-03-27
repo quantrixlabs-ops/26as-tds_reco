@@ -18,6 +18,10 @@ import { FullPageSpinner } from './components/ui/Spinner';
 // Pages
 import LoginPage from './pages/LoginPage';
 import SetupPage from './pages/SetupPage';
+import SignUpPage from './pages/SignUpPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
 import DashboardPage from './pages/DashboardPage';
 import NewRunPage from './pages/NewRunPage';
 import RunDetailPage from './pages/RunDetailPage';
@@ -83,6 +87,38 @@ function AppRoutes() {
         element={
           <GuestRoute>
             <SetupPage />
+          </GuestRoute>
+        }
+      />
+      <Route
+        path="/signup"
+        element={
+          <GuestRoute>
+            <SignUpPage />
+          </GuestRoute>
+        }
+      />
+      <Route
+        path="/forgot-password"
+        element={
+          <GuestRoute>
+            <ForgotPasswordPage />
+          </GuestRoute>
+        }
+      />
+      <Route
+        path="/reset-password"
+        element={
+          <GuestRoute>
+            <ResetPasswordPage />
+          </GuestRoute>
+        }
+      />
+      <Route
+        path="/verify-email"
+        element={
+          <GuestRoute>
+            <VerifyEmailPage />
           </GuestRoute>
         }
       />

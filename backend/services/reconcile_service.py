@@ -74,12 +74,16 @@ async def _next_run_number(db: AsyncSession) -> int:
 async def _load_match_config(
     db: AsyncSession,
     run_config_overrides: Optional[dict] = None,
-) -> MatchConfig:
-    """Load admin settings from DB, apply any per-run overrides, return MatchConfig."""
+) -> Tuple[MatchConfig, Optional[str]]:
+    """Load admin settings from DB, apply any per-run overrides, return (MatchConfig, admin_settings_id).
+
+    Returns the admin_settings_id so callers can link the exact settings version to the run.
+    """
     result = await db.execute(
         select(AdminSettings).where(AdminSettings.is_active == True)
     )
     admin_settings = result.scalar_one_or_none()
+    admin_settings_id = admin_settings.id if admin_settings else None
 
     if admin_settings:
         match_cfg = MatchConfig(
@@ -107,7 +111,16 @@ async def _load_match_config(
             if hasattr(match_cfg, key) and value is not None:
                 setattr(match_cfg, key, value)
 
-    return match_cfg
+    return match_cfg, admin_settings_id
+
+
+def _match_config_from_snapshot(run_config: dict) -> MatchConfig:
+    """Reconstruct MatchConfig from a stored run_config snapshot (for reproducible reruns)."""
+    cfg = MatchConfig()
+    for key, value in run_config.items():
+        if hasattr(cfg, key) and value is not None:
+            setattr(cfg, key, value)
+    return cfg
 
 
 def _config_snapshot(match_cfg: Optional[MatchConfig] = None) -> dict:
@@ -197,7 +210,7 @@ async def run_reconciliation(
     started_at = datetime.now(timezone.utc)
 
     # ── 0. Load MatchConfig from DB + overrides ──────────────────────────────
-    match_cfg = await _load_match_config(db, run_config)
+    match_cfg, admin_settings_id = await _load_match_config(db, run_config)
 
     # ── 1. File integrity hashing ─────────────────────────────────────────────
     sap_hash = sha256_file(sap_bytes)
@@ -215,6 +228,7 @@ async def run_reconciliation(
         algorithm_version=settings.ALGORITHM_VERSION,
         config_snapshot=_config_snapshot(match_cfg),
         run_config=match_cfg.to_dict(),
+        admin_settings_id=admin_settings_id,
         status="PROCESSING",
         mode="BATCH" if batch_id else "SINGLE",
         batch_id=batch_id,
@@ -486,7 +500,7 @@ async def run_reconciliation(
             reason_code, reason_detail = _determine_unmatched_reason(entry, remaining_books, noise_threshold=effective_noise)
             db.add(Unmatched26AS(
                 run_id=run.id,
-                as26_row_hash=_hash_as26_idx(entry.index),
+                as26_row_hash=_hash_as26_idx(entry.index, entry.amount, entry.section, entry.tan),
                 deductor_name=entry.deductor_name,
                 tan=entry.tan,
                 transaction_date=entry.transaction_date,
@@ -611,7 +625,7 @@ async def run_reconciliation_on_existing_run(
     run = result.scalar_one()
 
     # ── 0. Load MatchConfig from DB + overrides ──────────────────────────────
-    match_cfg = await _load_match_config(db, run_config)
+    match_cfg, _admin_id = await _load_match_config(db, run_config)
 
     progress_store.create(run.id)
 
@@ -833,7 +847,7 @@ async def run_reconciliation_on_existing_run(
             reason_code, reason_detail = _determine_unmatched_reason(entry, remaining_books, noise_threshold=effective_noise)
             db.add(Unmatched26AS(
                 run_id=run.id,
-                as26_row_hash=_hash_as26_idx(entry.index),
+                as26_row_hash=_hash_as26_idx(entry.index, entry.amount, entry.section, entry.tan),
                 deductor_name=entry.deductor_name,
                 tan=entry.tan,
                 transaction_date=entry.transaction_date,
@@ -1045,12 +1059,19 @@ def _df_to_as26_entries(df: pd.DataFrame) -> List[As26Entry]:
 
 
 def _hash_as26_entry(result: AssignmentResult) -> str:
-    sig = f"{result.as26_index}|{result.as26_amount}|{result.as26_date}|{result.as26_section}"
-    return hashlib.sha256(sig.encode()).hexdigest()[:16]
+    """Full SHA-256 hash of all identifying 26AS fields (no truncation for collision safety)."""
+    sig = (
+        f"{result.as26_index}|{result.as26_amount}|{result.as26_date}|"
+        f"{result.as26_section}|{getattr(result, 'as26_tan', '')}|"
+        f"{getattr(result, 'as26_deductor', '')}"
+    )
+    return hashlib.sha256(sig.encode()).hexdigest()
 
 
-def _hash_as26_idx(idx: int) -> str:
-    return hashlib.sha256(str(idx).encode()).hexdigest()[:16]
+def _hash_as26_idx(idx: int, amount: float = 0.0, section: str = "", tan: str = "") -> str:
+    """Full SHA-256 hash for unmatched 26AS entries (no truncation)."""
+    sig = f"{idx}|{amount}|{section}|{tan}"
+    return hashlib.sha256(sig.encode()).hexdigest()
 
 
 def _book_was_matched(

@@ -52,6 +52,24 @@ class Settings(BaseSettings):
     # ── CORS ─────────────────────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
+    # ── Frontend URL (for email links) ────────────────────────────────────
+    FRONTEND_URL: str = "http://localhost:3000"
+
+    # ── Email / SMTP ──────────────────────────────────────────────────────
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_TLS: bool = True
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = "noreply@tds-matcher.com"
+
+    # ── Auth Security ─────────────────────────────────────────────────────
+    PASSWORD_RESET_EXPIRE_HOURS: int = 1
+    EMAIL_VERIFY_EXPIRE_HOURS: int = 24
+    MAX_LOGIN_ATTEMPTS: int = 5
+    LOCKOUT_DURATION_MINUTES: int = 15
+    ALLOW_SELF_REGISTRATION: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

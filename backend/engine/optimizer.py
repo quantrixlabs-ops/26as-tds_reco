@@ -22,8 +22,10 @@ Results are routed into two buckets inside one list:
 
 Both tiers use composite scores from scorer.py -- NOT just variance.
 Final selection is deterministic and reproducible (same input -> same output every time).
+All dictionary iterations are explicitly sorted, and tie-breaking uses stable
+secondary keys (as26_index, book_index) to guarantee identical output across runs.
 
-If scipy unavailable, falls back to enhanced greedy (descending score order).
+If scipy unavailable, falls back to enhanced greedy (descending score, deterministic tie-break).
 """
 from __future__ import annotations
 
@@ -389,7 +391,7 @@ def _phase_a_clearing_groups(
         best_score = -1.0
         target = as26.amount
 
-        for clr_doc, group in valid_groups.items():
+        for clr_doc, group in sorted(valid_groups.items()):  # deterministic iteration
             # All entries available?
             if any(b.index in excluded for b in group):
                 continue
@@ -423,7 +425,8 @@ def _phase_a_clearing_groups(
             score = score_candidate(target, as26.transaction_date, as26.section, candidate,
                                      enforce_before=cfg.enforce_books_before_26as)
 
-            if score.total > best_score:
+            # Deterministic tie-breaking: higher score wins; on tie, lower clr_doc wins
+            if score.total > best_score or (score.total == best_score and best_result and clr_doc < best_result[3]):
                 best_score = score.total
                 best_result = (group, score, var_pct, clr_doc)
 
@@ -495,7 +498,7 @@ def _proxy_clearing_groups(
         best_result = None
         best_score = -1.0
 
-        for doc_date, group in valid_date_groups.items():
+        for doc_date, group in sorted(valid_date_groups.items()):  # deterministic iteration
             avail = [b for b in group if b.index not in excluded]
             if len(avail) < 2:
                 continue
@@ -599,7 +602,8 @@ def _phase_b_global(
     normal_candidates: Dict[Tuple[int, int], Tuple] = {}
     soft_candidates: Dict[Tuple[int, int], Tuple] = {}
 
-    for key, val in all_candidates.items():
+    for key in sorted(all_candidates.keys()):  # deterministic iteration by (as26_idx, book_idx)
+        val = all_candidates[key]
         score_val, var_pct, match_type, score_obj, book, date_cat, alert, days_gap = val
         # Route to bipartite if within auto-confirm ceiling
         # Categories: "" (normal), "HIGH_VARIANCE_3_20", "DATE_SOFT_PREFERENCE" all go to bipartite
@@ -642,7 +646,8 @@ def _phase_b_global(
     # Build suggested from soft candidates (only for as26 entries that weren't matched)
     matched_as26_ids = {r.as26_index for r in results}
     suggested: List[AssignmentResult] = []
-    for (a_idx, b_idx), val in soft_candidates.items():
+    for (a_idx, b_idx) in sorted(soft_candidates.keys()):  # deterministic iteration
+        val = soft_candidates[(a_idx, b_idx)]
         if a_idx in matched_as26_ids:
             continue  # already matched normally
         score_val, var_pct, match_type, score_obj, book, date_cat, alert, days_gap = val
@@ -667,9 +672,12 @@ def _phase_b_global(
     # Deduplicate suggested: keep only the best suggestion per as26 entry
     best_suggested: Dict[int, AssignmentResult] = {}
     for s in suggested:
-        if s.as26_index not in best_suggested or s.score.total > best_suggested[s.as26_index].score.total:
+        existing = best_suggested.get(s.as26_index)
+        if existing is None or s.score.total > existing.score.total or (
+            s.score.total == existing.score.total and s.books[0].index < existing.books[0].index
+        ):
             best_suggested[s.as26_index] = s
-    suggested = list(best_suggested.values())
+    suggested = [best_suggested[k] for k in sorted(best_suggested.keys())]  # deterministic order
 
     # Combo matching for remaining unmatched (exclude those that have suggestions)
     suggested_as26_ids = {s.as26_index for s in suggested}
@@ -864,8 +872,8 @@ def _greedy_single(
     consumed_invoice_refs: Set[int],
     cfg: MatchConfig,
 ) -> Tuple[List[AssignmentResult], List[As26Entry], Set[int]]:
-    """Score-descending greedy single assignment."""
-    sorted_cands = sorted(candidates.items(), key=lambda x: -x[1][0])
+    """Score-descending greedy single assignment (deterministic tie-breaking by index pair)."""
+    sorted_cands = sorted(candidates.items(), key=lambda x: (-x[1][0], x[0][0], x[0][1]))
     as26_by_idx = {e.index: e for e in as26_entries}
     matched_a26: Set[int] = set()
     matched_books: Set[int] = set()
