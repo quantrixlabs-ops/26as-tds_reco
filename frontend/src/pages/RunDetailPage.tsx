@@ -652,25 +652,31 @@ function MatchedTab({ runId }: { runId: string }) {
                               {r.score_breakdown ? (
                                 <div className="space-y-1.5">
                                   {[
-                                    { label: 'Variance', value: r.score_breakdown.variance },
-                                    { label: 'Date Proximity', value: r.score_breakdown.date_proximity },
-                                    { label: 'Section Match', value: r.score_breakdown.section },
-                                    { label: 'Clearing Doc', value: r.score_breakdown.clearing_doc },
-                                    { label: 'Historical', value: r.score_breakdown.historical },
-                                  ].map((s) => (
-                                    <div key={s.label} className="flex items-center gap-2">
-                                      <span className="text-xs text-gray-500 w-24">{s.label}</span>
-                                      <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                                        <div
-                                          className="h-full bg-[#1B3A5C] rounded-full"
-                                          style={{ width: `${Math.min(100, (s.value ?? 0) * 100)}%` }}
-                                        />
+                                    { label: 'Variance', value: r.score_breakdown.variance, max: 30 },
+                                    { label: 'Date Proximity', value: r.score_breakdown.date_proximity, max: 20 },
+                                    { label: 'Section Match', value: r.score_breakdown.section, max: 20 },
+                                    { label: 'Clearing Doc', value: r.score_breakdown.clearing_doc, max: 20 },
+                                    { label: 'Historical', value: r.score_breakdown.historical, max: 10 },
+                                  ].map((s) => {
+                                    const raw = s.value ?? 0;
+                                    // Scores come as 0–1 fractions of composite; convert to component points
+                                    const pts = raw > 1 ? raw : raw * s.max;
+                                    const pct = Math.min(100, (pts / s.max) * 100);
+                                    return (
+                                      <div key={s.label} className="flex items-center gap-2">
+                                        <span className="text-xs text-gray-500 w-24">{s.label}</span>
+                                        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                          <div
+                                            className="h-full bg-[#1B3A5C] rounded-full"
+                                            style={{ width: `${pct}%` }}
+                                          />
+                                        </div>
+                                        <span className="text-xs font-mono text-gray-600 w-16 text-right">
+                                          {s.value != null ? `${pts.toFixed(1)}/${s.max}` : '—'}
+                                        </span>
                                       </div>
-                                      <span className="text-xs font-mono text-gray-600 w-10 text-right">
-                                        {s.value != null ? (s.value * 100).toFixed(0) + '%' : '--'}
-                                      </span>
-                                    </div>
-                                  ))}
+                                    );
+                                  })}
                                 </div>
                               ) : (
                                 <p className="text-xs text-gray-400">No score breakdown available</p>
@@ -683,32 +689,32 @@ function MatchedTab({ runId }: { runId: string }) {
                               <div className="space-y-2">
                                 <div className="flex items-center justify-between text-xs">
                                   <span className="text-gray-500">Match Type</span>
-                                  <span className="font-mono font-medium text-gray-800">{r.match_type}</span>
+                                  <span className="font-mono font-medium text-gray-800">{r.match_type || '—'}</span>
                                 </div>
                                 <div className="flex items-center justify-between text-xs">
                                   <span className="text-gray-500">Confidence</span>
-                                  <Badge variant={confidenceVariant(r.confidence)} size="sm">{r.confidence}</Badge>
+                                  <Badge variant={confidenceVariant(r.confidence)} size="sm">{r.confidence || '—'}</Badge>
                                 </div>
                                 <div className="flex items-center justify-between text-xs">
                                   <span className="text-gray-500">Variance Amount</span>
-                                  <span className="font-mono text-gray-700">{formatCurrency(r.variance_amt)}</span>
+                                  <span className="font-mono text-gray-700">{r.variance_amt != null ? formatCurrency(r.variance_amt) : '—'}</span>
                                 </div>
-                                {r.cross_fy != null && (
-                                  <div className="flex items-center justify-between text-xs">
-                                    <span className="text-gray-500">Cross-FY</span>
-                                    {r.cross_fy
-                                      ? <Badge variant="orange" size="sm">Yes</Badge>
-                                      : <span className="text-gray-400">No</span>}
-                                  </div>
-                                )}
-                                {r.is_prior_year != null && (
-                                  <div className="flex items-center justify-between text-xs">
-                                    <span className="text-gray-500">Prior Year</span>
-                                    {r.is_prior_year
-                                      ? <Badge variant="yellow" size="sm">Yes</Badge>
-                                      : <span className="text-gray-400">No</span>}
-                                  </div>
-                                )}
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-gray-500">Variance %</span>
+                                  <span className="font-mono text-gray-700">{r.variance_pct != null ? formatPct(r.variance_pct) : '—'}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-gray-500">Cross-FY</span>
+                                  {r.cross_fy
+                                    ? <Badge variant="orange" size="sm">Yes</Badge>
+                                    : <span className="text-gray-400">No</span>}
+                                </div>
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-gray-500">Prior Year</span>
+                                  {r.is_prior_year
+                                    ? <Badge variant="yellow" size="sm">Yes</Badge>
+                                    : <span className="text-gray-400">No</span>}
+                                </div>
                                 {r.ai_risk_flag && (
                                   <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-md">
                                     <div className="flex items-center gap-1.5 mb-1">
@@ -754,16 +760,54 @@ function Unmatched26ASTab({ runId }: { runId: string }) {
     queryFn: () => runsApi.unmatched26as(runId),
   });
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const [reasonFilter, setReasonFilter] = useState<string>('');
 
   const toggleRow = (idx: number) => {
     setExpandedRow(expandedRow === idx ? null : idx);
   };
 
+  const totalAmount = data.reduce((sum, r) => sum + (r.amount || 0), 0);
+  const reasonCodes = [...new Set(data.map((r) => r.reason_code).filter(Boolean))].sort();
+  const filtered = reasonFilter ? data.filter((r) => r.reason_code === reasonFilter) : data;
+  const filteredAmount = filtered.reduce((sum, r) => sum + (r.amount || 0), 0);
+
   return (
     <Card padding={false}>
-      <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
-        <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-        <p className="text-xs text-gray-500">{data.length} unmatched 26AS entries</p>
+      <div className="px-4 py-3 border-b border-gray-100 space-y-2">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+            <p className="text-xs text-gray-500">
+              {reasonFilter
+                ? <>{filtered.length} of {data.length} entries · {formatCurrency(filteredAmount)}</>
+                : <>{data.length} unmatched 26AS entries</>}
+            </p>
+          </div>
+          {data.length > 0 && (
+            <p className="text-sm font-semibold text-red-600">
+              Total exposure: {formatCurrency(totalAmount)}
+            </p>
+          )}
+        </div>
+        {reasonCodes.length > 1 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">Filter by reason:</span>
+            <select
+              value={reasonFilter}
+              onChange={(e) => setReasonFilter(e.target.value)}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:border-[#1B3A5C]"
+            >
+              <option value="">All reason codes</option>
+              {reasonCodes.map((code) => {
+                const count = data.filter((r) => r.reason_code === code).length;
+                return <option key={code} value={code}>{code} ({count})</option>;
+              })}
+            </select>
+            {reasonFilter && (
+              <button onClick={() => setReasonFilter('')} className="text-xs text-red-500 hover:underline">Clear</button>
+            )}
+          </div>
+        )}
       </div>
       <div className="w-full overflow-x-auto">
         <table className="w-full text-sm">
@@ -788,12 +832,14 @@ function Unmatched26ASTab({ runId }: { runId: string }) {
                   ))}
                 </tr>
               ))
-            ) : data.length === 0 ? (
+            ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-12 text-center text-gray-400 text-sm">All 26AS entries matched</td>
+                <td colSpan={8} className="px-4 py-12 text-center text-gray-400 text-sm">
+                  {reasonFilter ? 'No entries match the selected reason code' : 'All 26AS entries matched'}
+                </td>
               </tr>
             ) : (
-              data.map((r, idx) => (
+              filtered.map((r, idx) => (
                 <Fragment key={`u26-${idx}`}>
                   <tr
                     className="hover:bg-gray-50 transition-colors cursor-pointer"
@@ -992,6 +1038,13 @@ function ExceptionsTab({ runId, canReview }: { runId: string; canReview: boolean
   const [reviewing, setReviewing] = useState<string | null>(null);
   const [noteInput, setNoteInput] = useState('');
   const [actionInput, setActionInput] = useState('ACKNOWLEDGED');
+  const [expandedDesc, setExpandedDesc] = useState<Set<string>>(new Set());
+  const [sevFilter, setSevFilter] = useState<string>('');
+  const [catFilter, setCatFilter] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkAction, setBulkAction] = useState('ACKNOWLEDGED');
+  const [bulkProcessing, setBulkProcessing] = useState(false);
 
   const reviewMut = useMutation({
     mutationFn: ({ id, action, notes }: { id: string; action: string; notes: string }) =>
@@ -1004,7 +1057,62 @@ function ExceptionsTab({ runId, canReview }: { runId: string; canReview: boolean
     onError: (err) => toast('Review failed', getErrorMessage(err), 'error'),
   });
 
+  const toggleDesc = (id: string) => {
+    const next = new Set(expandedDesc);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setExpandedDesc(next);
+  };
+
+  const sevOptions = [...new Set(data.map((e) => e.severity))].sort();
+  const catOptions = [...new Set(data.map((e) => e.category))].sort();
+
+  let filtered = data;
+  if (sevFilter) filtered = filtered.filter((e) => e.severity === sevFilter);
+  if (catFilter) filtered = filtered.filter((e) => e.category === catFilter);
+  if (statusFilter === 'pending') filtered = filtered.filter((e) => !e.reviewed);
+  if (statusFilter === 'reviewed') filtered = filtered.filter((e) => e.reviewed);
+
+  const unreviewed = data.filter((e) => !e.reviewed).length;
+
+  const handleBulkReview = async () => {
+    if (selectedIds.size === 0) return;
+    setBulkProcessing(true);
+    let success = 0;
+    for (const excId of selectedIds) {
+      try {
+        await runsApi.reviewException(runId, excId, bulkAction, 'Bulk reviewed');
+        success++;
+      } catch { /* continue */ }
+    }
+    qc.invalidateQueries({ queryKey: ['runs', runId, 'exceptions'] });
+    setSelectedIds(new Set());
+    setBulkProcessing(false);
+    toast(`${success} exceptions reviewed`, undefined, 'success');
+  };
+
+  const toggleSelect = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedIds(next);
+  };
+
+  const selectAllPending = () => {
+    setSelectedIds(new Set(filtered.filter((e) => !e.reviewed).map((e) => e.id)));
+  };
+
   const cols: Column<Exception>[] = [
+    ...(canReview ? [{
+      key: 'select' as keyof Exception,
+      header: '',
+      render: (r: Exception) => !r.reviewed ? (
+        <input
+          type="checkbox"
+          checked={selectedIds.has(r.id)}
+          onChange={() => toggleSelect(r.id)}
+          className="rounded border-gray-300 text-[#1B3A5C] focus:ring-[#1B3A5C] h-3.5 w-3.5"
+        />
+      ) : null,
+    }] : []),
     {
       key: 'severity',
       header: 'Severity',
@@ -1019,7 +1127,25 @@ function ExceptionsTab({ runId, canReview }: { runId: string; canReview: boolean
     {
       key: 'description',
       header: 'Description',
-      render: (r) => <span className="text-xs text-gray-600">{truncate(r.description, 60)}</span>,
+      render: (r) => {
+        const isLong = r.description.length > 60;
+        const isExpanded = expandedDesc.has(r.id);
+        return (
+          <div>
+            <span className="text-xs text-gray-600">
+              {isLong && !isExpanded ? truncate(r.description, 60) : r.description}
+            </span>
+            {isLong && (
+              <button
+                onClick={(e) => { e.stopPropagation(); toggleDesc(r.id); }}
+                className="ml-1 text-[10px] text-[#1B3A5C] font-medium hover:underline"
+              >
+                {isExpanded ? 'less' : 'more'}
+              </button>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: 'amount',
@@ -1043,7 +1169,7 @@ function ExceptionsTab({ runId, canReview }: { runId: string; canReview: boolean
         ),
     },
     {
-      key: 'actions',
+      key: 'actions' as keyof Exception,
       header: '',
       render: (r) =>
         !r.reviewed && canReview ? (
@@ -1098,14 +1224,80 @@ function ExceptionsTab({ runId, canReview }: { runId: string; canReview: boolean
 
   return (
     <Card padding={false}>
-      <div className="px-4 py-3 border-b border-gray-100">
-        <p className="text-xs text-gray-500">
-          {data.filter((e) => !e.reviewed).length} unreviewed exceptions
-        </p>
+      <div className="px-4 py-3 border-b border-gray-100 space-y-2">
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-xs text-gray-500">
+            {unreviewed} unreviewed of {data.length} exceptions
+            {sevFilter || catFilter || statusFilter ? ` · showing ${filtered.length}` : ''}
+          </p>
+          {selectedIds.size > 0 && canReview && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">{selectedIds.size} selected</span>
+              <select
+                value={bulkAction}
+                onChange={(e) => setBulkAction(e.target.value)}
+                className="text-xs border border-gray-200 rounded px-2 py-1"
+              >
+                <option value="ACKNOWLEDGED">Acknowledge</option>
+                <option value="WAIVED">Waive</option>
+              </select>
+              <button
+                onClick={handleBulkReview}
+                disabled={bulkProcessing}
+                className="text-xs bg-[#1B3A5C] text-white px-3 py-1 rounded hover:bg-[#15304d] disabled:opacity-50"
+              >
+                {bulkProcessing ? 'Processing…' : 'Mark selected'}
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={sevFilter}
+            onChange={(e) => setSevFilter(e.target.value)}
+            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-[#1B3A5C]"
+          >
+            <option value="">All severities</option>
+            {sevOptions.map((s) => <option key={s} value={s}>{s} ({data.filter((e) => e.severity === s).length})</option>)}
+          </select>
+          <select
+            value={catFilter}
+            onChange={(e) => setCatFilter(e.target.value)}
+            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-[#1B3A5C]"
+          >
+            <option value="">All categories</option>
+            {catOptions.map((c) => <option key={c} value={c}>{c} ({data.filter((e) => e.category === c).length})</option>)}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:border-[#1B3A5C]"
+          >
+            <option value="">All statuses</option>
+            <option value="pending">Pending ({unreviewed})</option>
+            <option value="reviewed">Reviewed ({data.length - unreviewed})</option>
+          </select>
+          {canReview && unreviewed > 0 && (
+            <button
+              onClick={selectAllPending}
+              className="text-xs text-[#1B3A5C] font-medium hover:underline"
+            >
+              Select all pending
+            </button>
+          )}
+          {(sevFilter || catFilter || statusFilter) && (
+            <button
+              onClick={() => { setSevFilter(''); setCatFilter(''); setStatusFilter(''); }}
+              className="text-xs text-red-500 hover:underline"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
       </div>
       <Table
         columns={cols}
-        data={data}
+        data={filtered}
         keyExtractor={(r) => r.id}
         loading={isLoading}
         emptyMessage="No exceptions found"
@@ -1116,7 +1308,7 @@ function ExceptionsTab({ runId, canReview }: { runId: string; canReview: boolean
 
 // ── Audit Trail tab ───────────────────────────────────────────────────────────
 
-function AuditTrailTab({ runId }: { runId: string }) {
+function AuditTrailTab({ runId, runStatus }: { runId: string; runStatus?: string }) {
   const { data = [], isLoading } = useQuery({
     queryKey: ['runs', runId, 'audit'],
     queryFn: () => runsApi.auditTrail(runId),
@@ -1124,8 +1316,19 @@ function AuditTrailTab({ runId }: { runId: string }) {
 
   if (isLoading) return <FullPageSpinner />;
 
+  const isApproved = runStatus === 'APPROVED';
+  const hasReviewEvent = data.some((e: any) => e.event_type === 'REVIEW_APPROVED');
+
   return (
     <Card>
+      {isApproved && !hasReviewEvent && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-800">
+            Review authorization event not recorded — this run may have been approved outside normal workflow (e.g., auto-approved by the batch pipeline).
+          </p>
+        </div>
+      )}
       <div className="space-y-4">
         {data.length === 0 && (
           <p className="text-sm text-gray-400 text-center py-8">No audit events yet</p>
@@ -1190,6 +1393,19 @@ export default function RunDetailPage() {
   const exceptionsHighCount = exceptions.filter(
     (e: Exception) => e.severity === 'CRITICAL' || e.severity === 'HIGH',
   ).length;
+
+  // Fetch audit trail for compliance checks
+  const { data: auditEvents = [] } = useQuery({
+    queryKey: ['runs', id, 'audit'],
+    queryFn: () => runsApi.auditTrail(id!),
+    enabled: !!run && run.status !== 'PROCESSING',
+  });
+
+  const isAutoApprovedBelowThreshold =
+    run?.status === 'APPROVED' &&
+    run.match_rate_pct < 75 &&
+    !auditEvents.some((e: any) => e.event_type === 'REVIEW_APPROVED');
+
 
   const reviewMut = useMutation({
     mutationFn: ({ action, notes }: { action: 'APPROVED' | 'REJECTED'; notes?: string }) =>
@@ -1304,6 +1520,11 @@ export default function RunDetailPage() {
               <Badge variant={runStatusVariant(run.status)}>
                 {runStatusLabel(run.status)}
               </Badge>
+              {isAutoApprovedBelowThreshold && (
+                <Badge variant="orange" size="sm">
+                  Auto-approved below 75% threshold
+                </Badge>
+              )}
               {run.constraint_violations > 0 && (
                 <Badge variant="red" size="sm">
                   {run.constraint_violations} violations
@@ -1512,8 +1733,17 @@ export default function RunDetailPage() {
             </div>
             <div>
               <p className="text-xs text-gray-400 mb-0.5">Total as per Books</p>
-              <p className="text-base font-bold text-gray-800">{formatCurrency(run.total_sap_amount ?? 0)}</p>
-              <p className="text-[10px] text-gray-400">{run.total_sap_entries || 0} SAP entries</p>
+              {run.total_sap_amount && run.total_sap_amount > 0 ? (
+                <>
+                  <p className="text-base font-bold text-gray-800">{formatCurrency(run.total_sap_amount)}</p>
+                  <p className="text-[10px] text-gray-400">{run.total_sap_entries || 0} SAP entries</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-base font-bold text-gray-400">—</p>
+                  <p className="text-[10px] text-gray-400">{run.total_sap_entries || 0} SAP entries (total not aggregated)</p>
+                </>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-400 mb-0.5">Matched Total</p>
@@ -1707,7 +1937,7 @@ export default function RunDetailPage() {
           <ExceptionsTab runId={id!} canReview={canReview} />
         </TabsPrimitive.Content>
         <TabsPrimitive.Content value="audit">
-          <AuditTrailTab runId={id!} />
+          <AuditTrailTab runId={id!} runStatus={run.status} />
         </TabsPrimitive.Content>
       </TabsPrimitive.Root>
     </PageWrapper>

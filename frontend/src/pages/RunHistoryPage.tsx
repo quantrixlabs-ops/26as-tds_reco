@@ -170,6 +170,10 @@ function BatchGroupCard({ group, onRunClick, onRefresh }: { group: BatchGroup; o
             <span className="text-xs text-gray-400">·</span>
             <span className="text-xs text-gray-400">{formatDateTime(group.created_at)}</span>
           </div>
+          <p className="text-xs text-gray-500 mt-0.5 truncate">
+            {group.runs.slice(0, 3).map((r) => r.deductor_name || '—').join(', ')}
+            {group.runs.length > 3 && ` +${group.runs.length - 3} more`}
+          </p>
           <div className="flex items-center gap-3 mt-1 flex-wrap">
             {group.completed > 0 && (
               <span className="text-xs text-emerald-600 font-medium">{group.completed} finished</span>
