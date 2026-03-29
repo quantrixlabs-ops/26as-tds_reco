@@ -35,6 +35,7 @@ import { PageWrapper } from '../components/ui/PageHeader';
 import {
   formatDateTime,
   formatPct,
+  matchRateColor,
   runStatusVariant,
   runStatusLabel,
   formatFY,
@@ -150,15 +151,7 @@ export default function DashboardPage() {
       align: 'right',
       sortable: true,
       render: (r) => (
-        <span
-          className={
-            r.match_rate_pct >= 95
-              ? 'text-emerald-600 font-semibold'
-              : r.match_rate_pct >= 80
-              ? 'text-amber-600 font-semibold'
-              : 'text-red-600 font-semibold'
-          }
-        >
+        <span className={`${matchRateColor(r.match_rate_pct)} font-semibold`}>
           {formatPct(r.match_rate_pct)}
         </span>
       ),

@@ -52,6 +52,7 @@ import {
   formatDateTime,
   formatCurrency,
   formatPct,
+  matchRateColor,
   runStatusVariant,
   runStatusLabel,
   confidenceVariant,
@@ -61,6 +62,7 @@ import {
   truncate,
   copyToClipboard,
 } from '../lib/utils';
+import { ErrorBoundary } from '../components/ui/ErrorBoundary';
 import SectionSummaryTab from '../components/SectionSummaryTab';
 import MismatchTrackerTab from '../components/MismatchTrackerTab';
 import MatchingMethodologyPanel from '../components/MatchingMethodologyPanel';
@@ -1178,6 +1180,17 @@ export default function RunDetailPage() {
     },
   });
 
+  // Fetch exceptions for badge counts (lightweight — only needs count + severity)
+  const { data: exceptions = [] } = useQuery({
+    queryKey: ['runs', id, 'exceptions'],
+    queryFn: () => runsApi.exceptions(id!),
+    enabled: !!run && run.status !== 'PROCESSING',
+  });
+
+  const exceptionsHighCount = exceptions.filter(
+    (e: Exception) => e.severity === 'CRITICAL' || e.severity === 'HIGH',
+  ).length;
+
   const reviewMut = useMutation({
     mutationFn: ({ action, notes }: { action: 'APPROVED' | 'REJECTED'; notes?: string }) =>
       runsApi.review(id!, action, notes),
@@ -1457,13 +1470,7 @@ export default function RunDetailPage() {
         <StatCard
           label="Match Rate"
           value={formatPct(run.match_rate_pct)}
-          accentColor={
-            run.match_rate_pct >= 95
-              ? 'text-emerald-600'
-              : run.match_rate_pct >= 80
-              ? 'text-amber-600'
-              : 'text-red-600'
-          }
+          accentColor={matchRateColor(run.match_rate_pct)}
         />
         <StatCard
           label="Matched"
@@ -1620,12 +1627,14 @@ export default function RunDetailPage() {
           {[
             { value: 'matched', label: 'Matched Pairs', icon: <CheckCircle className="h-3.5 w-3.5" />, count: run.matched_count },
             { value: 'unmatched-26as', label: 'Unmatched 26AS', icon: <AlertTriangle className="h-3.5 w-3.5" />, count: run.unmatched_26as_count },
-{ value: 'unmatched-books', label: 'Unmatched Books', icon: <BookOpen className="h-3.5 w-3.5" /> },
-            { value: 'suggested', label: 'Suggested Matches', icon: <Lightbulb className="h-3.5 w-3.5" /> },
+            { value: 'unmatched-books', label: 'Unmatched Books', icon: <BookOpen className="h-3.5 w-3.5" /> },
+            { value: 'suggested', label: 'Suggested Matches', icon: <Lightbulb className="h-3.5 w-3.5" />,
+              count: run.suggested_count, badgeColor: run.suggested_count > 0 ? 'bg-amber-100 text-amber-700' : undefined },
             { value: 'sections', label: 'Section Summary', icon: <PieChart className="h-3.5 w-3.5" /> },
             { value: 'tracker', label: 'Resolution Tracker', icon: <ListChecks className="h-3.5 w-3.5" /> },
             { value: 'methodology', label: 'Methodology', icon: <FileText className="h-3.5 w-3.5" /> },
-            { value: 'exceptions', label: 'Exceptions', icon: <ClipboardList className="h-3.5 w-3.5" /> },
+            { value: 'exceptions', label: 'Exceptions', icon: <ClipboardList className="h-3.5 w-3.5" />,
+              count: exceptions.length, badgeColor: exceptionsHighCount > 0 ? 'bg-red-100 text-red-700' : undefined },
             { value: 'audit', label: 'Audit Trail', icon: <Activity className="h-3.5 w-3.5" /> },
           ].map((t) => (
             <TabsPrimitive.Trigger
@@ -1646,7 +1655,7 @@ export default function RunDetailPage() {
                     'ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold',
                     tab === t.value
                       ? 'bg-[#1B3A5C] text-white'
-                      : 'bg-gray-100 text-gray-600',
+                      : t.badgeColor || 'bg-gray-100 text-gray-600',
                   )}
                 >
                   {t.count}
@@ -1662,11 +1671,28 @@ export default function RunDetailPage() {
         <TabsPrimitive.Content value="unmatched-26as">
           <Unmatched26ASTab runId={id!} />
         </TabsPrimitive.Content>
-<TabsPrimitive.Content value="unmatched-books">
+        <TabsPrimitive.Content value="unmatched-books">
           <UnmatchedBooksTab runId={id!} />
         </TabsPrimitive.Content>
         <TabsPrimitive.Content value="suggested">
-          <SuggestedMatchesTab runId={id!} />
+          <ErrorBoundary
+            fallback={(_err, reset) => (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <AlertTriangle className="h-10 w-10 text-amber-500 mb-3" />
+                <h3 className="text-base font-semibold text-gray-900 mb-1">Unable to load suggested matches</h3>
+                <p className="text-sm text-gray-500 mb-4">An error occurred while rendering this tab. Please try again.</p>
+                <button
+                  onClick={reset}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-[#1B3A5C] text-white hover:bg-[#15304d] transition-colors"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry
+                </button>
+              </div>
+            )}
+          >
+            <SuggestedMatchesTab runId={id!} />
+          </ErrorBoundary>
         </TabsPrimitive.Content>
         <TabsPrimitive.Content value="sections">
           <SectionSummaryTab runId={id!} />

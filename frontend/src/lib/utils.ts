@@ -152,6 +152,15 @@ export function roleVariant(role: string): BadgeVariant {
   }
 }
 
+// ── Match rate color ─────────────────────────────────────────────────────────
+// 75% is the legal approval gate — red below, orange 75–85, green 85+
+
+export function matchRateColor(pct: number): string {
+  if (pct >= 85) return 'text-emerald-600';
+  if (pct >= 75) return 'text-amber-600';
+  return 'text-red-600';
+}
+
 // ── Misc ──────────────────────────────────────────────────────────────────────
 
 export function truncate(str: string, maxLen = 40): string {

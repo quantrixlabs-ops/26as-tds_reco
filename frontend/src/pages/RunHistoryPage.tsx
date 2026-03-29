@@ -31,6 +31,7 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import {
   formatDateTime,
   formatPct,
+  matchRateColor,
   runStatusVariant,
   runStatusLabel,
   formatFY,
@@ -111,11 +112,7 @@ function buildBatchGroups(runs: RunSummary[]): BatchGroup[] {
 
 // ── Match rate color ────────────────────────────────────────────────────────
 
-function matchRateColor(pct: number): string {
-  if (pct >= 95) return 'text-emerald-600';
-  if (pct >= 80) return 'text-amber-600';
-  return 'text-red-600';
-}
+// matchRateColor imported from utils — 75% is the legal approval gate
 
 function statusIcon(status: string) {
   if (status === 'PROCESSING') return <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin" />;
