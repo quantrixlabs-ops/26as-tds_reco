@@ -652,6 +652,10 @@ async def run_reconciliation(
 
         as26_entries = _df_to_as26_entries(validated_df[validated_df["_valid"] == True])
 
+        # Compute control totals from entry objects BEFORE releasing DataFrames
+        total_26as_amount = float(sum(e.amount for e in as26_entries))
+        total_sap_amount = float(sum(b.amount for b in book_entries))
+
         # ── Memory release: free DataFrames now that entry objects are built ──────
         # Prevents double-residency (DataFrame + entry list both in RAM simultaneously).
         # Frees ~400–800 MB before the optimizer allocates its working structures.
@@ -678,9 +682,6 @@ async def run_reconciliation(
         target_fy = financial_year
         current_books = [b for b in book_entries if b.sap_fy == target_fy or not b.sap_fy]
         prior_books = [b for b in book_entries if b.sap_fy and b.sap_fy != target_fy]
-
-        total_26as_amount = float(validated_df[validated_df["_valid"] == True]["amount"].sum())
-        total_sap_amount = float(sum(b.amount for b in book_entries))
 
         progress_store.update(run.id,
                               total_26as=len(as26_entries),
