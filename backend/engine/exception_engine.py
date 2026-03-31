@@ -282,31 +282,11 @@ def generate_exceptions(
                 section=None,
             ))
 
-    # Phase 7H: Anomaly detection — amount outliers
+    # Phase 7H: Anomaly detection — multivariate outlier detection via Isolation Forest
+    # Falls back to stddev if scikit-learn unavailable.
     anomaly_enabled = getattr(cfg, 'anomaly_detection_enabled', False) if cfg else False
     if anomaly_enabled and matched:
-        import statistics
-        amounts = [r.as26_amount for r in matched if r.as26_amount > 0]
-        if len(amounts) >= 5:  # Need enough data for meaningful stats
-            mean_amt = statistics.mean(amounts)
-            stdev_amt = statistics.stdev(amounts)
-            outlier_threshold = getattr(cfg, 'amount_outlier_stddev', 3.0) if cfg else 3.0
-            if stdev_amt > 0:
-                for r in matched:
-                    z_score = abs(r.as26_amount - mean_amt) / stdev_amt
-                    if z_score >= outlier_threshold:
-                        exceptions.append(_exc(
-                            run_id=run_id,
-                            exception_type="AMOUNT_OUTLIER",
-                            severity="MEDIUM",
-                            description=(
-                                f"Amount ₹{r.as26_amount:,.2f} is {z_score:.1f} stddev from mean "
-                                f"(₹{mean_amt:,.0f} ± ₹{stdev_amt:,.0f}). "
-                                f"Match type: {r.match_type}, section: {r.as26_section}"
-                            ),
-                            amount=r.as26_amount,
-                            section=r.as26_section,
-                        ))
+        _run_anomaly_detection(matched, cfg, exceptions, run_id)
 
     # Phase 7J: System health — high exception rate alert
     sys_alerts = getattr(cfg, 'system_alerts_enabled', False) if cfg else False
@@ -394,6 +374,87 @@ def detect_pan_risk(
                 section=section,
             ))
     return exceptions
+
+
+def _run_anomaly_detection(matched, cfg, exceptions, run_id) -> None:
+    """
+    Multivariate outlier detection using Isolation Forest (scikit-learn).
+    Falls back to univariate z-score if sklearn is unavailable.
+
+    Features used: amount, variance_pct — two dimensions give better separation
+    than amount alone (a large legitimate payment is not an anomaly; a large payment
+    with unexpected variance IS).
+    """
+    records = [
+        (r, r.as26_amount, getattr(r, 'variance_pct', 0.0))
+        for r in matched
+        if r.as26_amount > 0
+    ]
+    if len(records) < 5:
+        return
+
+    outlier_threshold = getattr(cfg, 'amount_outlier_stddev', 3.0) if cfg else 3.0
+    # Map stddev threshold (1–5) to Isolation Forest contamination (0.001–0.10)
+    contamination = min(0.10, max(0.001, (outlier_threshold - 1.0) / 40.0 + 0.01))
+
+    try:
+        import numpy as np
+        from sklearn.ensemble import IsolationForest
+        X = np.array([[amt, var] for _, amt, var in records])
+        # Normalise columns (amount can be millions, variance is 0-20)
+        col_max = X.max(axis=0)
+        col_max[col_max == 0] = 1.0
+        X_norm = X / col_max
+
+        clf = IsolationForest(
+            n_estimators=100,
+            contamination=contamination,
+            random_state=42,
+            n_jobs=1,         # single thread — safe on 8 GB RAM
+        )
+        labels = clf.fit_predict(X_norm)  # -1 = outlier, 1 = inlier
+        scores = clf.score_samples(X_norm)  # lower = more anomalous
+
+        for (r, amt, var), label, score in zip(records, labels, scores):
+            if label == -1:
+                exceptions.append(_exc(
+                    run_id=run_id,
+                    exception_type="AMOUNT_OUTLIER",
+                    severity="MEDIUM",
+                    description=(
+                        f"Isolation Forest anomaly: ₹{amt:,.2f} at {var:.1f}% variance "
+                        f"(anomaly score {score:.3f}). "
+                        f"Match type: {r.match_type}, section: {r.as26_section}"
+                    ),
+                    amount=amt,
+                    section=r.as26_section,
+                ))
+
+    except ImportError:
+        # Fallback: univariate z-score on amount only
+        import statistics
+        amounts = [amt for _, amt, _ in records]
+        if len(amounts) < 2:
+            return
+        mean_amt = statistics.mean(amounts)
+        stdev_amt = statistics.stdev(amounts)
+        if stdev_amt <= 0:
+            return
+        for r, amt, _ in records:
+            z_score = abs(amt - mean_amt) / stdev_amt
+            if z_score >= outlier_threshold:
+                exceptions.append(_exc(
+                    run_id=run_id,
+                    exception_type="AMOUNT_OUTLIER",
+                    severity="MEDIUM",
+                    description=(
+                        f"Amount ₹{amt:,.2f} is {z_score:.1f} stddev from mean "
+                        f"(₹{mean_amt:,.0f} ± ₹{stdev_amt:,.0f}). "
+                        f"Match type: {r.match_type}, section: {r.as26_section}"
+                    ),
+                    amount=amt,
+                    section=r.as26_section,
+                ))
 
 
 def _exc(

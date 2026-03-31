@@ -206,6 +206,7 @@ def generate_excel_v2(
     variance_analysis_enabled: bool = True,
     watermark_text: str | None = None,
     redact_pan: bool = False,
+    encrypt_password: str | None = None,
 ) -> bytes:
     # Deduplicate matched pairs by as26_row_hash (safety net)
     seen_hashes: set = set()
@@ -265,7 +266,13 @@ def generate_excel_v2(
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-    return buf.read()
+    raw_bytes = buf.read()
+
+    # AES-256-GCM encryption (opt-in via encrypt_password)
+    if encrypt_password:
+        from core.encryption import encrypt_bytes
+        return encrypt_bytes(raw_bytes, encrypt_password)
+    return raw_bytes
 
 
 def _build_summary(ws, run: ReconciliationRun, matched, unmatched_26as, exceptions):

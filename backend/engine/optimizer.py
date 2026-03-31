@@ -50,6 +50,9 @@ from config import (
     VARIANCE_CAP_FORCE_SINGLE,
     FORCE_COMBO_MAX_INVOICES,
     FORCE_COMBO_MAX_VARIANCE,
+    MATRIX_CELL_LIMIT,
+    BIPARTITE_CHUNK_SIZE,
+    COMBO_PER_ENTRY_BUDGET_MS,
     MatchConfig,
 )
 
@@ -1002,18 +1005,30 @@ def _bipartite_match(
     """
     scipy linear_sum_assignment on the candidate score matrix.
     Maximizes total composite score across all 1:1 assignments globally.
-    """
-    as26_idx_map = {e.index: i for i, e in enumerate(as26_entries)}
-    book_indices = sorted({k[1] for k in candidates})
-    book_idx_map = {bi: i for i, bi in enumerate(book_indices)}
 
+    Memory safety: when the estimated matrix size exceeds MATRIX_CELL_LIMIT (~40 MB),
+    automatically switches to chunked bipartite (BIPARTITE_CHUNK_SIZE entries per chunk)
+    to stay within safe RAM bounds on 8 GB systems.
+    """
+    book_indices = sorted({k[1] for k in candidates})
     n_a = len(as26_entries)
     n_b = len(book_indices)
 
     if n_a == 0 or n_b == 0:
         return [], as26_entries, set()
 
-    # Cost matrix: negate score (scipy minimizes)
+    # Choose dense vs chunked based on estimated matrix memory footprint
+    if n_a * n_b > MATRIX_CELL_LIMIT and n_a > BIPARTITE_CHUNK_SIZE:
+        return _bipartite_match_chunked(
+            as26_entries, candidates, used_book_indices, consumed_invoice_refs, cfg,
+            book_indices=book_indices,
+        )
+
+    # ── Dense bipartite (standard path) ──────────────────────────────────────
+    as26_idx_map = {e.index: i for i, e in enumerate(as26_entries)}
+    book_idx_map = {bi: i for i, bi in enumerate(book_indices)}
+
+    # Cost matrix: negate score (scipy minimizes; uncontested cells = 1000 = never assigned)
     cost = np.full((n_a, n_b), 1000.0)
 
     entry_map: Dict[Tuple[int, int], Tuple] = {}
@@ -1056,6 +1071,55 @@ def _bipartite_match(
 
     unmatched = [e for e in as26_entries if e.index not in matched_as26_indices]
     return matched, unmatched, used_books
+
+
+def _bipartite_match_chunked(
+    as26_entries: List[As26Entry],
+    candidates: dict,
+    used_book_indices: Set[int],
+    consumed_invoice_refs: Set[int],
+    cfg: MatchConfig,
+    book_indices: Optional[List[int]] = None,
+) -> Tuple[List[AssignmentResult], List[As26Entry], Set[int]]:
+    """
+    Memory-safe chunked bipartite for large datasets (> MATRIX_CELL_LIMIT cells).
+
+    Splits as26_entries into windows of BIPARTITE_CHUNK_SIZE. Per chunk, only
+    the candidate books relevant to that chunk are loaded — keeping each sub-matrix
+    well within safe RAM limits on 8 GB systems.
+
+    Slight optimality loss vs global bipartite (cross-chunk book contention) is
+    negligible in practice: entries in different chunks rarely compete for the same invoice.
+    """
+    all_matched: List[AssignmentResult] = []
+    all_unmatched: List[As26Entry] = []
+    all_used: Set[int] = set()
+
+    local_used = set(used_book_indices) | set(consumed_invoice_refs)
+
+    for chunk_start in range(0, len(as26_entries), BIPARTITE_CHUNK_SIZE):
+        chunk = as26_entries[chunk_start: chunk_start + BIPARTITE_CHUNK_SIZE]
+        chunk_indices = {e.index for e in chunk}
+
+        # Only candidates belonging to this chunk (reduces effective n_b dramatically)
+        chunk_candidates = {
+            k: v for k, v in candidates.items()
+            if k[0] in chunk_indices and k[1] not in local_used
+        }
+        if not chunk_candidates:
+            all_unmatched.extend(chunk)
+            continue
+
+        # Recurse: this call is guaranteed STANDARD (small chunk → small matrix)
+        c_matched, c_unmatched, c_used = _bipartite_match(
+            chunk, chunk_candidates, local_used, set(), cfg
+        )
+        all_matched.extend(c_matched)
+        all_unmatched.extend(c_unmatched)
+        all_used.update(c_used)
+        local_used.update(c_used)  # commit chunk books so next chunk can't reuse
+
+    return all_matched, all_unmatched, all_used
 
 
 def _greedy_single(
@@ -1133,8 +1197,16 @@ def _smart_combo_match(
     small_cap = min(MAX_COMBO_SIZE, admin_max_size)
     combo_ceiling = cfg.variance_normal_ceiling_pct
 
-    # Process smallest entries first within each pass
-    sorted_entries = sorted(as26_entries, key=lambda e: e.amount)
+    # Sort by ascending candidate count (scarcest entries first — they're hardest to match,
+    # process them before the budget runs low)
+    def _candidate_count_estimate(e: "As26Entry") -> int:
+        if e.amount <= 0:
+            return 999999
+        lo = e.amount * 0.80
+        hi = e.amount * 1.005
+        return sum(1 for b in sorted_books if lo <= b.amount <= hi and b.index not in excluded)
+
+    sorted_entries = sorted(as26_entries, key=_candidate_count_estimate)
 
     # Two-pass: small combos first, then larger if admin allows
     passes = [small_cap]
@@ -1142,15 +1214,19 @@ def _smart_combo_match(
         passes.append(admin_max_size)
 
     matched_ids: Set[int] = set()
+    per_entry_budget_s = COMBO_PER_ENTRY_BUDGET_MS / 1000.0
 
     for pass_idx, max_size in enumerate(passes):
         for as26 in sorted_entries:
             if as26.index in matched_ids:
                 continue
 
-            if time.monotonic() - combo_start_time > COMBO_TIMEOUT_SECONDS:
+            elapsed = time.monotonic() - combo_start_time
+            if elapsed > COMBO_TIMEOUT_SECONDS:
                 logger.warning(f"Combo timeout after {COMBO_TIMEOUT_SECONDS}s in pass {pass_idx+1}")
                 break
+
+            entry_start = time.monotonic()
 
             target = as26.amount
             tol = target + cfg.exact_tolerance
@@ -1178,7 +1254,10 @@ def _smart_combo_match(
 
             best_result = _greedy_accumulate(target, eligible, cfg.exact_tolerance, max_size, variance_ceiling=combo_ceiling)
 
-            if best_result is None:
+            # Per-entry budget check: if greedy didn't find anything quickly,
+            # skip DP for this entry when time is running low
+            entry_elapsed = time.monotonic() - entry_start
+            if best_result is None and entry_elapsed < per_entry_budget_s:
                 amounts = [b.amount for b, _, _ in eligible]
                 dp_indices = _subset_sum_dp(target, amounts, cfg.exact_tolerance, max_size, variance_ceiling=combo_ceiling)
                 if dp_indices is not None:

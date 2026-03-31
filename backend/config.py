@@ -40,6 +40,12 @@ AUTO_APPROVAL_MIN_MATCH_RATE: float = 75.0  # Runs below this match rate require
 MIN_APPROVAL_MATCH_RATE: float = 75.0       # Reviewer cannot approve below this (same for consistency)
 HIGH_VALUE_THRESHOLD: float = 1_000_000     # ₹10 lakh — unmatched 26AS entries above this are CRITICAL
 COMBO_TIMEOUT_SECONDS: int = 120            # Hard cap on combo matching time (total across all entries)
+COMBO_PER_ENTRY_BUDGET_MS: int = 50        # Max milliseconds per entry in combo matching (prevents single entry monopolising budget)
+
+# ── Memory Safety ─────────────────────────────────────────────────────────────
+MAX_PARALLEL_WORKERS: int = 2              # Hard limit for ProcessPool workers on 8 GB RAM
+MATRIX_CELL_LIMIT: int = 5_000_000        # Bipartite matrix cells above which chunked mode activates (~40 MB @ float64)
+BIPARTITE_CHUNK_SIZE: int = 2_000         # 26AS entries per bipartite chunk in CHUNKED mode
 
 # ── Cleaning Pipeline ─────────────────────────────────────────────────────────
 NOISE_THRESHOLD: float = 1.0    # Rows with amount < ₹1 are excluded (keep all meaningful amounts)

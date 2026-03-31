@@ -44,7 +44,11 @@ if _is_sqlite:
     def _set_sqlite_pragmas(dbapi_conn, connection_record):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=30000")  # 30 seconds
+        cursor.execute("PRAGMA busy_timeout=30000")    # 30 seconds
+        cursor.execute("PRAGMA cache_size = -131072")  # 128 MB page cache cap (negative = KB)
+        cursor.execute("PRAGMA temp_store = MEMORY")   # temp tables in RAM, not disk
+        cursor.execute("PRAGMA mmap_size = 268435456") # 256 MB memory-mapped I/O
+        cursor.execute("PRAGMA synchronous = NORMAL")  # WAL + NORMAL = safe + faster than FULL
         cursor.close()
 
 AsyncSessionLocal = async_sessionmaker(

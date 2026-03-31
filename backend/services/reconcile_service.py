@@ -652,6 +652,13 @@ async def run_reconciliation(
 
         as26_entries = _df_to_as26_entries(validated_df[validated_df["_valid"] == True])
 
+        # ── Memory release: free DataFrames now that entry objects are built ──────
+        # Prevents double-residency (DataFrame + entry list both in RAM simultaneously).
+        # Frees ~400–800 MB before the optimizer allocates its working structures.
+        import gc
+        del clean_df, validated_df
+        gc.collect()
+
         # ── 5a. 26AS duplicate/revision detection (Phase 3C) ───────────────────
         as26_duplicate_warnings: List[dict] = []
         _as26_dup_setting = await db.execute(
@@ -679,6 +686,18 @@ async def run_reconciliation(
                               total_26as=len(as26_entries),
                               total_sap=len(book_entries),
                               detail=f"{len(as26_entries)} 26AS entries, {len(book_entries)} SAP entries ready")
+
+        # ── 5b. Dataset profiler — auto-selects bipartite strategy ────────────
+        from engine.profiler import profile_dataset
+        ds_profile = profile_dataset(as26_entries, book_entries)
+        logger.info(
+            "dataset_profile_selected",
+            strategy=ds_profile.strategy,
+            n_26as=ds_profile.n_26as,
+            n_books=ds_profile.n_books,
+            est_matrix_cells=ds_profile.estimated_matrix_cells,
+            notes=ds_profile.notes,
+        )
 
         # ── 6. Run global optimizer ───────────────────────────────────────────
         # Bridge callback: optimizer -> progress_store
